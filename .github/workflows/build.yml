@@ -1,0 +1,62 @@
+name: build
+
+# Runs the whole suite, integration tests included. The unit suites are fast enough that
+# splitting them into a separate job would buy a minute and cost the ability to say "the
+# build is green" and mean it.
+#
+# There is no remote configured for this repository yet, deliberately: the schema and its
+# seed data are regulated personal data by design intent, and a push destination is a
+# decision for UDS rather than a default. This file is written anyway — it costs nothing and
+# is correct on the day a remote exists.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Testcontainers needs no setup on GitHub's Ubuntu runners — the Docker daemon is
+      # already there. Stated so nobody adds a service container that would conflict with
+      # the one Testcontainers starts.
+      - name: Build and test
+        working-directory: platform
+        run: mvn -B verify
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: |
+            platform/*/target/surefire-reports/
+            platform/*/target/failsafe-reports/
+          if-no-files-found: ignore
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built but not pushed. A registry is a deployment decision, and an image of this
+      # service pushed somewhere public would be an image of the group's compliance schema.
+      - name: Build service image
+        working-directory: platform
+        run: docker build -f consent-service/Dockerfile -t uds/consent-service:${{ github.sha }} .

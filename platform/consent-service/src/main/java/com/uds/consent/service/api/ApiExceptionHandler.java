@@ -1,6 +1,7 @@
 package com.uds.consent.service.api;
 
 import com.uds.consent.core.snapshot.SnapshotVerifier;
+import com.uds.consent.service.NoticeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,6 +42,37 @@ public class ApiExceptionHandler {
         ProblemDetail problem =
                 ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
         problem.setTitle("Invalid request");
+        return problem;
+    }
+
+    @ExceptionHandler(NoticeService.NoticeNotFoundException.class)
+    public ProblemDetail onNoticeNotFound(NoticeService.NoticeNotFoundException e) {
+        ProblemDetail problem =
+                ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+        problem.setTitle("Notice not found");
+        return problem;
+    }
+
+    /**
+     * The notice exists but not in the language asked for.
+     *
+     * <p>Answered with the gap made explicit — which languages do exist — rather than by quietly
+     * returning English. A subject shown a notice in a language they do not read has not been
+     * informed, and a consent record captured against it looks valid and is not. The response
+     * carries enough for a capture surface to offer a real choice instead of a false one.
+     *
+     * <p>Logged by the service at WARN, not here: it is a translation gap the group should close,
+     * not a mistake the caller made.
+     */
+    @ExceptionHandler(NoticeService.TranslationNotAvailableException.class)
+    public ProblemDetail onTranslationUnavailable(NoticeService.TranslationNotAvailableException e) {
+        ProblemDetail problem =
+                ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+        problem.setTitle("Notice not available in that language");
+        problem.setProperty("noticeId", e.noticeId());
+        problem.setProperty("noticeVersion", e.version());
+        problem.setProperty("requestedLanguage", e.requestedLanguage());
+        problem.setProperty("availableLanguages", e.availableLanguages());
         return problem;
     }
 

@@ -30,7 +30,7 @@ class CaptureValidatorTest {
     private static final Instant NOW = Fixtures.NOW;
 
     private final CaptureValidator validator =
-            new CaptureValidator(Fixtures.fullCatalog(), Fixtures.allModules());
+            new CaptureValidator(Fixtures.fullCatalog(), Fixtures.applications(), Fixtures.allModules());
 
     // -------------------------------------------------------------------------------------------
     // DPDP Rule 8 — dark patterns
@@ -61,7 +61,7 @@ class CaptureValidatorTest {
     @DisplayName("accepting without an equally available way to refuse is rejected")
     void refusalMustBeOfferedAsPlainlyAsAcceptance() {
         CaptureSubmission noRejectAll = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, "en", Channel.WEB, "APP", CaptureMethod.CHECKBOX_OPT_IN,
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN,
                 ActorType.SUBJECT, "subject-1", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
                 false, NOW, "idem-1", "evidence://form/1", Map.of());
@@ -77,7 +77,7 @@ class CaptureValidatorTest {
         // demonstrably found a way to refuse, and blocking that record would lose the very
         // interaction most worth keeping.
         CaptureSubmission allDeclined = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, "en", Channel.WEB, "APP", CaptureMethod.CHECKBOX_OPT_IN,
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN,
                 ActorType.SUBJECT, "subject-1", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.declined("WEB_ADVERTISING")),
                 false, NOW, "idem-2", null, Map.of());
@@ -123,7 +123,7 @@ class CaptureValidatorTest {
         // Without both, the group can say a person consented and can never show what they read.
         // In 2031 that distinction is the whole case.
         CaptureSubmission incomplete = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, null, Channel.WEB, "APP", CaptureMethod.CHECKBOX_OPT_IN,
+                Jurisdiction.IN, null, Channel.WEB, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN,
                 ActorType.SUBJECT, "subject-1", "NOTICE_TEST", null,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
                 true, NOW, "idem-3", null, Map.of());
@@ -143,7 +143,7 @@ class CaptureValidatorTest {
         // Under PIPA this is not weak consent, it is invalid consent. Catching it at ingestion is
         // the only place the fix is cheap.
         CaptureSubmission bundled = new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.KR,
-                "ko", null, "APP", CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
+                "ko", null, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
                 "subject-1", "NOTICE_TEST", 1,
                 List.of(new CaptureSubmission.PurposeChoice("MKT_OUTBOUND_CALL", true, false, false),
                         new CaptureSubmission.PurposeChoice("BGV_CRIMINAL_RECORD", true, false,
@@ -158,7 +158,7 @@ class CaptureValidatorTest {
     @DisplayName("the same two purposes, each actioned on its own, are accepted in Korea")
     void itemisedConsentIsAcceptedInKorea() {
         CaptureSubmission itemised = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.KR, "ko", null, "APP", CaptureMethod.CHECKBOX_OPT_IN,
+                Jurisdiction.KR, "ko", null, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN,
                 ActorType.SUBJECT, "subject-1", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("MKT_OUTBOUND_CALL"),
                         CaptureSubmission.PurposeChoice.acceptedSeparately("BGV_CRIMINAL_RECORD")),
@@ -194,13 +194,13 @@ class CaptureValidatorTest {
                     java.util.Set.of(Channel.WEB), com.uds.consent.core.model.ExpiryPolicy.NONE,
                     null, com.uds.consent.core.model.FailureBehavior.FAIL_CLOSED,
                     java.util.Set.of("CONTACT_PERSONAL"), false, true, false)),
-            Fixtures.allModules());
+            Fixtures.applications(), Fixtures.allModules());
 
     @Test
     @DisplayName("a child's consent without verified parental action is rejected")
     void childConsentNeedsAVerifiedGuardian() {
         CaptureSubmission byChild = new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.IN,
-                "en", Channel.WEB, "APP", CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
+                "en", Channel.WEB, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
                 "subject-1", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
                         "WEB_PROGRAMME_SIGNUP")),
@@ -214,7 +214,7 @@ class CaptureValidatorTest {
     @DisplayName("a guardian consenting on a child's behalf to a permitted purpose is accepted")
     void verifiedParentalConsentIsAccepted() {
         CaptureSubmission byGuardian = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, "en", Channel.WEB, "APP", CaptureMethod.PARENTAL_VERIFIED,
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
                         "WEB_PROGRAMME_SIGNUP")),
@@ -229,7 +229,7 @@ class CaptureValidatorTest {
         // s.9 bars behavioural tracking and targeted advertising at children outright. A parent
         // agreeing does not reopen it.
         CaptureSubmission byGuardian = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, "en", Channel.WEB, "APP", CaptureMethod.PARENTAL_VERIFIED,
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
                 true, NOW, "idem-7", null, Map.of("subject.isChild", "true"));
@@ -244,7 +244,7 @@ class CaptureValidatorTest {
         // The refusal is the most useful thing in the interaction. Refusing to store it because
         // the purpose is closed to children would discard the evidence that it was refused.
         CaptureSubmission byGuardian = new CaptureSubmission("DENAVE_IN", "subject-1",
-                Jurisdiction.IN, "en", Channel.WEB, "APP", CaptureMethod.PARENTAL_VERIFIED,
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.declined("WEB_ADVERTISING")),
                 true, NOW, "idem-8", null, Map.of("subject.isChild", "true"));
@@ -318,7 +318,7 @@ class CaptureValidatorTest {
         // An integrator who gets one error, fixes it, redeploys and gets the next is an integrator
         // who ships late and stops trusting the API.
         CaptureSubmission bad = new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.IN,
-                null, Channel.EMAIL, "APP", CaptureMethod.IMPORTED_WITH_PROVENANCE,
+                null, Channel.EMAIL, Fixtures.APP, CaptureMethod.IMPORTED_WITH_PROVENANCE,
                 ActorType.IMPORT, "import-job-3", "NOTICE_TEST", null,
                 List.of(new CaptureSubmission.PurposeChoice("WEB_ADVERTISING", true, true, true)),
                 false, NOW, "idem-9", null, Map.of());
@@ -332,11 +332,71 @@ class CaptureValidatorTest {
     }
 
     // -------------------------------------------------------------------------------------------
+    // Application registry — is this submission from a surface the group owns
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a submission from an unregistered surface is refused")
+    void unregisteredApplicationIsRefused() {
+        // Either an integration nobody reviewed, or someone with a stolen credential writing
+        // consent records. The submission is otherwise perfectly well formed, which is the point:
+        // nothing else in the platform would have noticed.
+        assertThat(codes(validator.validate(fromApplication("SOME_UNKNOWN_TOOL"))))
+                .contains(CaptureViolation.Code.APPLICATION_NOT_REGISTERED);
+    }
+
+    @Test
+    @DisplayName("a decommissioned surface still writing consent is refused")
+    void inactiveApplicationIsRefused() {
+        assertThat(codes(validator.validate(fromApplication(Fixtures.APP_RETIRED))))
+                .contains(CaptureViolation.Code.APPLICATION_NOT_REGISTERED);
+    }
+
+    @Test
+    @DisplayName("a surface cannot capture consent for a different group entity")
+    void applicationCannotCaptureForAnotherEntity() {
+        // What a leaked credential actually looks like from the inside. Every field is
+        // individually valid; only the relationship between the entity and the application is
+        // wrong, and per-entity isolation in the database is still Phase 1 work — so for now this
+        // check is the thing standing between Matrix's BGV workflow and Denave's ledger.
+        assertThat(codes(validator.validate(fromApplication(Fixtures.APP_OTHER_ENTITY))))
+                .contains(CaptureViolation.Code.APPLICATION_ENTITY_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("a registered, active surface belonging to the capturing entity passes")
+    void registeredApplicationPasses() {
+        assertThat(codes(validator.validate(fromApplication(Fixtures.APP))))
+                .doesNotContain(CaptureViolation.Code.APPLICATION_NOT_REGISTERED,
+                        CaptureViolation.Code.APPLICATION_ENTITY_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("an absent application id is permitted, deliberately and for now")
+    void missingApplicationIdIsNotYetAViolation() {
+        // Several surfaces predate the registry and send nothing. Rejecting them would drop real
+        // consent on the floor — the worst possible failure for a control whose whole purpose is
+        // preserving evidence. This test exists so that tightening the rule is a deliberate act
+        // that breaks a named expectation, rather than something that happens by accident.
+        assertThat(codes(validator.validate(fromApplication(null))))
+                .doesNotContain(CaptureViolation.Code.APPLICATION_NOT_REGISTERED,
+                        CaptureViolation.Code.APPLICATION_ENTITY_MISMATCH);
+    }
+
+    // -------------------------------------------------------------------------------------------
+
+    private static CaptureSubmission fromApplication(String applicationId) {
+        return new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.IN, "en", Channel.WEB,
+                applicationId, CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT, "subject-1",
+                "NOTICE_TEST", 1,
+                List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
+                true, NOW, "idem-" + System.nanoTime(), "evidence://form/1", Map.of());
+    }
 
     private static CaptureSubmission submission(Jurisdiction jurisdiction, Channel channel,
                                                 CaptureMethod method,
                                                 CaptureSubmission.PurposeChoice... choices) {
-        return new CaptureSubmission("DENAVE_IN", "subject-1", jurisdiction, "en", channel, "APP",
+        return new CaptureSubmission("DENAVE_IN", "subject-1", jurisdiction, "en", channel, Fixtures.APP,
                 method, ActorType.SUBJECT, "subject-1", "NOTICE_TEST", 1, List.of(choices), true,
                 NOW, "idem-" + System.nanoTime(), "evidence://form/1", Map.of());
     }

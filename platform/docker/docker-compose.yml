@@ -24,7 +24,12 @@ services:
       # Deterministic collation, so that ordering in a developer's database matches the server's.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
     ports:
-      - "5432:5432"
+      # 5433 on the host, not 5432. A developer machine very often already has a PostgreSQL
+      # running on the default port — a Homebrew install, another project's container — and
+      # the failure when it does is a port-bind error at `up` if you are lucky, or the
+      # application quietly migrating someone else's database if you are not. Override with
+      # POSTGRES_PORT if 5433 is taken too.
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
@@ -66,6 +71,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+
+  # The service itself. Under a profile so that `up -d` gives a database and nothing else,
+  # which is what you want while running the application from an IDE. Start the whole stack
+  # with `--profile app`.
+  consent-service:
+    build:
+      context: ..
+      dockerfile: consent-service/Dockerfile
+    container_name: uds-consent-service
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DB_URL: jdbc:postgresql://postgres:5432/uds_consent
+      DB_USER: uds_consent_app
+      DB_PASSWORD: uds_consent_app
+      DB_MIGRATION_URL: jdbc:postgresql://postgres:5432/uds_consent
+      DB_MIGRATION_USER: uds_consent_owner
+      DB_MIGRATION_PASSWORD: uds_consent_owner
+    ports:
+      - "${SERVICE_PORT:-8080}:8080"
 
 volumes:
   postgres-data:

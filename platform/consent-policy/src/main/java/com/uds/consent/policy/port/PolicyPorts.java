@@ -63,6 +63,30 @@ public final class PolicyPorts {
     }
 
     /**
+     * The registry of surfaces allowed to submit consent.
+     *
+     * <p>Used at capture rather than at decision. The question it answers is not "may this
+     * processing happen" but "is this submission from a surface the group knows about" — and an
+     * unrecognised surface writing consent records is either an integration nobody reviewed or an
+     * attempt to manufacture evidence. Both want catching at the door.
+     */
+    @FunctionalInterface
+    public interface ApplicationRegistry {
+        Optional<RegisteredApplication> find(String applicationId);
+    }
+
+    /**
+     * A surface the group has registered.
+     *
+     * @param environment PRODUCTION, STAGING and so on. Carried because a staging build writing
+     *                    into the production ledger is a real and unremarkable accident, and the
+     *                    registry is where it becomes visible
+     */
+    public record RegisteredApplication(String applicationId, String entityId, String name,
+                                        String platform, String environment, boolean active) {
+    }
+
+    /**
      * A matched suppression.
      *
      * @param source   where it came from

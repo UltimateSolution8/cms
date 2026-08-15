@@ -3,16 +3,25 @@ package com.uds.consent.service.api;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.ledger.service.BlastRadiusService;
 import com.uds.consent.ledger.service.LedgerIntegrityVerifier;
+import com.uds.consent.ledger.store.AdminAuditStore;
+import com.uds.consent.ledger.store.ApplicationRegistryStore;
 import com.uds.consent.ledger.store.EntityStore;
+import com.uds.consent.ledger.store.ProcessingActivityStore;
 import com.uds.consent.ledger.store.ProvenanceStore;
+import com.uds.consent.ledger.store.VendorStore;
+import com.uds.consent.service.ProvenanceService;
+import com.uds.consent.service.RopaService;
+import com.uds.consent.service.adapter.CachingApplicationRegistry;
 import com.uds.consent.service.adapter.CachingPurposeCatalog;
 import com.uds.consent.service.sweeper.IntegritySweeper;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -38,17 +47,28 @@ public class AdminController {
     private final BlastRadiusService blastRadius;
     private final LedgerIntegrityVerifier verifier;
     private final IntegritySweeper integritySweeper;
-    private final ProvenanceStore provenance;
+    private final ProvenanceService provenance;
+    private final RopaService ropa;
+    private final AdminAuditStore auditStore;
+    private final CachingApplicationRegistry applications;
+    private final ApplicationRegistryStore applicationStore;
 
     public AdminController(CachingPurposeCatalog purposes, EntityStore entities,
                            BlastRadiusService blastRadius, LedgerIntegrityVerifier verifier,
-                           IntegritySweeper integritySweeper, ProvenanceStore provenance) {
+                           IntegritySweeper integritySweeper, ProvenanceService provenance,
+                           RopaService ropa, AdminAuditStore auditStore,
+                           CachingApplicationRegistry applications,
+                           ApplicationRegistryStore applicationStore) {
+        this.applications = applications;
+        this.applicationStore = applicationStore;
         this.purposes = purposes;
         this.entities = entities;
         this.blastRadius = blastRadius;
         this.verifier = verifier;
         this.integritySweeper = integritySweeper;
         this.provenance = provenance;
+        this.ropa = ropa;
+        this.auditStore = auditStore;
     }
 
     /** The purpose registry as the decision engine currently sees it. */
@@ -57,11 +77,64 @@ public class AdminController {
         return purposes.all();
     }
 
-    /** Reloads the registry after a publish, without waiting for the refresh interval. */
+    /**
+     * Reloads the in-memory registries after a publish, without waiting for the refresh interval.
+     *
+     * <p>Refreshes purposes and applications together. They are both read on the capture path, and
+     * refreshing one without the other leaves a window in which a submission is checked against a
+     * new purpose registry and an old application registry — producing a rejection that resolves
+     * itself minutes later, which is the hardest kind of failure to get anyone to believe.
+     */
     @PostMapping("/purposes/refresh")
-    public Map<String, Object> refreshPurposes() {
+    public Map<String, Object> refreshRegistries() {
         purposes.refresh();
-        return Map.of("purposes", purposes.all().size(), "refreshed", true);
+        applications.refresh();
+        return Map.of("purposes", purposes.all().size(),
+                "applications", applications.size(),
+                "refreshed", true);
+    }
+
+    /** Surfaces registered to submit consent. */
+    @GetMapping("/applications")
+    public List<ApplicationRegistryStore.Application> applications(
+            @RequestParam(required = false) String entityId) {
+        return entityId == null ? applicationStore.findAll()
+                : applicationStore.findForEntity(entityId);
+    }
+
+    /**
+     * Registers a surface, or updates one.
+     *
+     * <p>Refreshes the cache in the same call. Registering an application and then having it
+     * rejected for five minutes would teach every integrator that the registry is unreliable, and
+     * a control people work around is worse than no control.
+     */
+    @PutMapping("/applications/{applicationId}")
+    public ApplicationRegistryStore.Application registerApplication(
+            @PathVariable String applicationId,
+            @Valid @RequestBody ApplicationRequest request,
+            Authentication authentication) {
+        ApplicationRegistryStore.Application application = new ApplicationRegistryStore.Application(
+                applicationId, request.entityId(), request.name(), request.platform(),
+                request.environment(), request.description(), request.active());
+        applicationStore.upsert(application);
+        applications.refresh();
+
+        auditStore.record(actorOf(authentication), "APPLICATION_REGISTERED", request.entityId(),
+                "application_registry", applicationId,
+                Map.of("name", request.name(), "platform", request.platform(),
+                        "environment", request.environment(),
+                        "active", String.valueOf(request.active())));
+        return application;
+    }
+
+    public record ApplicationRequest(
+            @NotBlank String entityId,
+            @NotBlank String name,
+            @NotBlank String platform,
+            @NotBlank String environment,
+            String description,
+            boolean active) {
     }
 
     /** The group's entity structure. */
@@ -120,7 +193,7 @@ public class AdminController {
     public List<ProvenanceStore.Record> quarantined(@RequestParam String entityId,
                                                      @RequestParam(defaultValue = "100") int limit,
                                                      @RequestParam(defaultValue = "0") int offset) {
-        return provenance.findQuarantined(entityId, limit, offset);
+        return provenance.quarantined(entityId, limit, offset);
     }
 
     /**
@@ -142,14 +215,135 @@ public class AdminController {
      * a judgement someone makes and stands behind, not a flag that gets flipped in bulk.
      */
     @PostMapping("/provenance/{id}/substantiate")
-    public Map<String, Object> substantiate(@PathVariable long id,
-                                             @RequestBody SubstantiateRequest request,
-                                             Authentication authentication) {
+    public ProvenanceStore.Record substantiate(@PathVariable long id,
+                                                @Valid @RequestBody SubstantiateRequest request,
+                                                Authentication authentication) {
         String actor = authentication == null ? "anonymous" : authentication.getName();
-        provenance.substantiate(id, request.evidenceNote(), actor);
-        return Map.of("id", id, "substantiated", true, "reviewedBy", actor);
+        return provenance.substantiate(id, request.evidenceNote(), actor);
     }
 
     public record SubstantiateRequest(@NotBlank String evidenceNote) {
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Record of Processing Activities
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * The full RoPA for one entity, gaps included.
+     *
+     * <p>Per entity, never per group: each entity is independently reportable and independently
+     * auditable, and a group rollup would answer a management question where a regulator asked a
+     * legal one.
+     */
+    @GetMapping("/ropa/{entityId}")
+    public RopaService.Ropa ropa(@PathVariable String entityId) {
+        return ropa.forEntity(entityId);
+    }
+
+    /**
+     * The same record, marked as having been handed to someone.
+     *
+     * <p>Separate from the read above so that a console refresh does not fill the audit trail with
+     * exports that never left the building. What this records is that a named party was given the
+     * record on a date — which is what makes it possible to stand behind it later.
+     */
+    @PostMapping("/ropa/{entityId}/export")
+    public RopaService.Ropa exportRopa(@PathVariable String entityId,
+                                        @RequestParam(required = false) String recipient,
+                                        Authentication authentication) {
+        return ropa.export(entityId, recipient, actorOf(authentication));
+    }
+
+    @GetMapping("/processing-activities")
+    public List<ProcessingActivityStore.Activity> processingActivities(
+            @RequestParam String entityId) {
+        return ropa.activitiesFor(entityId);
+    }
+
+    @PostMapping("/processing-activities")
+    public Map<String, Object> createProcessingActivity(
+            @Valid @RequestBody ProcessingActivityStore.Activity activity,
+            Authentication authentication) {
+        long id = ropa.createActivity(activity, actorOf(authentication));
+        return Map.of("id", id, "created", true);
+    }
+
+    @PutMapping("/processing-activities/{id}")
+    public Map<String, Object> updateProcessingActivity(
+            @PathVariable long id,
+            @Valid @RequestBody ProcessingActivityStore.Activity activity,
+            Authentication authentication) {
+        ropa.updateActivity(id, activity, actorOf(authentication));
+        return Map.of("id", id, "updated", true);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Vendors and processors
+    // ---------------------------------------------------------------------------------------
+
+    @GetMapping("/vendors")
+    public List<VendorStore.Vendor> vendors(@RequestParam String entityId,
+                                             @RequestParam(defaultValue = "false")
+                                             boolean activeOnly) {
+        return ropa.vendorsFor(entityId, activeOnly);
+    }
+
+    /**
+     * Registers or updates a processor.
+     *
+     * <p>A vendor with no data processing agreement is accepted and logged rather than refused.
+     * Refusing it would push the relationship into a spreadsheet where nothing tracks it; the
+     * missing agreement instead shows up as a gap on every RoPA export until it is closed.
+     */
+    @PutMapping("/vendors/{vendorId}")
+    public Map<String, Object> upsertVendor(@PathVariable String vendorId,
+                                             @Valid @RequestBody VendorRequest request,
+                                             Authentication authentication) {
+        VendorStore.Vendor vendor = new VendorStore.Vendor(vendorId, request.entityId(),
+                request.name(), request.role(), request.countries(), request.dpaReference(),
+                request.dpaSignedAt(), request.active());
+        ropa.upsertVendor(vendor, request.purposeCodes(), actorOf(authentication));
+        return Map.of("vendorId", vendorId, "registered", true, "hasDpa", vendor.hasDpa());
+    }
+
+    public record VendorRequest(
+            @NotBlank String entityId,
+            @NotBlank String name,
+            @NotBlank String role,
+            List<String> countries,
+            String dpaReference,
+            java.time.LocalDate dpaSignedAt,
+            boolean active,
+            List<String> purposeCodes) {
+
+        public VendorRequest {
+            countries = countries == null ? List.of() : List.copyOf(countries);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Administrative audit trail
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Who did what in the control plane.
+     *
+     * <p>The trail is append-only and enforced as such by trigger, and until now nothing could
+     * read it. An immutable audit trail nobody can see is an audit trail nobody checks — which
+     * makes it a control in name and a cost in practice.
+     *
+     * <p>{@code entityId} is optional: group-level actions such as loading a statutory suppression
+     * registry belong to no single entity, and omitting the filter is how they are found.
+     */
+    @GetMapping("/audit")
+    public List<AdminAuditStore.Entry> auditTrail(
+            @RequestParam(required = false) String entityId,
+            @RequestParam(defaultValue = "100") int limit) {
+        return auditStore.recent(entityId, Math.min(limit, 1000));
+    }
+
+    private static String actorOf(Authentication authentication) {
+        return authentication == null ? "anonymous" : authentication.getName();
     }
 }

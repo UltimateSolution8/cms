@@ -84,6 +84,13 @@ uds:
       integrity-enabled: true
       integrity-page-size: 200
       integrity-cron: "0 15 2 * * *"
+      # Statutory deadlines on rights requests. Breaches log at ERROR every pass until the
+      # request is closed; wire that level to the on-call channel, or the sweep is something
+      # that ran rather than something anyone read.
+      rights-sla-enabled: true
+      rights-sla-interval: PT15M
+      rights-sla-batch-size: 500
+      rights-sla-warning-window: P3D
 
     events:
       # 'log' needs no broker and is the right default for a developer machine. Switch to

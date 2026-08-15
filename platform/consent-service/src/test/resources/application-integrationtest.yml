@@ -15,6 +15,9 @@ uds:
     sweeper:
       expiry-enabled: false
       integrity-enabled: false
+      # The SLA sweeper is driven directly with a controlled clock. Deadline behaviour that
+      # can only be exercised by waiting a month does not get tested.
+      rights-sla-enabled: false
     events:
       publisher: log
     # Every client the base configuration declares needs a password here, because the platform

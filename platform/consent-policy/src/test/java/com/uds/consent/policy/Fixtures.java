@@ -56,6 +56,29 @@ public final class Fixtures {
                 new PdpaMalaysiaModule(), new CcpaModule());
     }
 
+    /** The application ids the seeded registry below knows about. */
+    public static final String APP = "DENAVE_WEB";
+    public static final String APP_OTHER_ENTITY = "MATRIX_BGV";
+    public static final String APP_RETIRED = "DENAVE_LEGACY_FORM";
+
+    /**
+     * The registry of surfaces, mirroring the shape of the seeded one.
+     *
+     * <p>Includes an inactive surface and one belonging to a different entity, because those are
+     * the two cases the check exists for and a fixture that only holds valid rows would let the
+     * check pass while doing nothing.
+     */
+    public static PolicyPorts.ApplicationRegistry applications() {
+        Map<String, PolicyPorts.RegisteredApplication> registry = new HashMap<>();
+        registry.put(APP, new PolicyPorts.RegisteredApplication(
+                APP, ENTITY, "denave.com", "WEB", "PRODUCTION", true));
+        registry.put(APP_OTHER_ENTITY, new PolicyPorts.RegisteredApplication(
+                APP_OTHER_ENTITY, "MATRIX", "BGV workflow", "BACKEND", "PRODUCTION", true));
+        registry.put(APP_RETIRED, new PolicyPorts.RegisteredApplication(
+                APP_RETIRED, ENTITY, "Legacy web form", "WEB", "PRODUCTION", false));
+        return applicationId -> Optional.ofNullable(registry.get(applicationId));
+    }
+
     /** Mutable purpose registry. */
     public static class Catalog implements PolicyPorts.PurposeCatalog {
 

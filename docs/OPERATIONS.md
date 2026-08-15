@@ -163,6 +163,33 @@ worthless.
 | Expiry | `sweeper.expiry-interval` | 5 min | Writes durable `EXPIRED` events for lapsed artefacts. Decisions do **not** wait for it — `effectiveStatus` already treats a lapsed consent as expired — so a delay here costs evidence tidiness, not correctness |
 | Integrity | `sweeper.integrity-cron` | 02:15 daily | §3 |
 | Outbox relay | `events.relay-interval` | 2 s | Drains `event_outbox` to the broker |
+| Rights SLA | `sweeper.rights-sla-interval` | 15 min | §4.1 |
+
+### 4.1 The rights-request SLA sweep
+
+Every open rights request carries a deadline fixed at intake from its type and jurisdiction —
+ten days under Korea's PIPA, thirty under GDPR, forty-five under CPRA, one day for a withdrawal.
+The sweep compares them against the clock and logs:
+
+| Level | Meaning | Response |
+|---|---|---|
+| `WARN` | Falls due inside `sweeper.rights-sla-warning-window` (default 3 days) | There is still time. Make sure it is assigned |
+| `ERROR` | **Already past its deadline.** A statutory breach that has happened | Wake somebody. It repeats every pass until the request is closed, deliberately |
+
+**Wire `ERROR` from `RightsSlaSweeper` to the on-call channel.** The failure mode this exists for
+is not somebody deciding to miss a deadline — it is a request sitting in a queue nobody opened for
+six weeks. That failure is silent by nature, so the countermeasure has to be noisy.
+
+The deadline is **stored on the row**, not recomputed on read. Changing a period in
+`StatutoryClock` therefore affects new requests only, and cannot retroactively turn a request that
+was answered in time into a breach, or the reverse. That is the property that makes the record
+usable as evidence.
+
+⚠️ **The Indian periods in `StatutoryClock` are the group's own undertaking, not a statutory
+figure** — the DPDP Act leaves the response period to be prescribed. They must be reconciled
+against the published privacy notice and signed off by legal before go-live. A deadline the
+platform believes in and the notice contradicts makes the group's own records the evidence against
+it.
 
 Set `uds.consent.events.publisher` to `kafka` **before any downstream system depends on hearing
 about withdrawals.** The default is `log`, which needs no broker and is right for a developer
@@ -260,5 +287,18 @@ Before a deployment is considered production-ready:
 - [ ] Backup restore procedure includes a full chain verification (§3.2)
 - [ ] Statutory registry loads scheduled for every jurisdiction the entity operates in (§5)
 - [ ] Data residency confirmed for each entity's scope (§1.2)
+- [ ] Rights-SLA sweep enabled and its `ERROR` level routed to on-call (§4.1)
+- [ ] Indian statutory periods in `StatutoryClock` reconciled with the published notice and signed
+      off by legal (§4.1)
+- [ ] Every capture surface registered in `application_registry` for the right entity and
+      environment — an unregistered id is refused, and a staging build pointed at production is
+      exactly what this catches
+- [ ] Notice language coverage reviewed per entity (`GET /v1/notices/reports/coverage`); the
+      shortfall is a translation procurement with an owner and a date, not a backlog item
+- [ ] Vendors with no signed DPA reviewed (`GET /v1/admin/vendors`, and the gap list on every RoPA
+      export). Registration is permitted without one so the relationship stays tracked; leaving it
+      unpapered is not
 - [ ] Row-level security for per-entity isolation — **not yet implemented**; until it is, restrict
-      admin credentials per entity at the identity provider and record the gap on the risk register
+      admin credentials per entity at the identity provider and record the gap on the risk
+      register. Note that `APPLICATION_ENTITY_MISMATCH` at capture is currently the only thing
+      preventing one entity's credential writing into another's ledger

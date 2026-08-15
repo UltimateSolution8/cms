@@ -46,7 +46,17 @@ docker compose -f docker/docker-compose.yml up -d
 ```
 
 ```bash
-mvn spring-boot:run -pl consent-service -Dspring-boot.run.profiles=local
+DB_URL=jdbc:postgresql://localhost:5433/uds_consent DB_MIGRATION_URL=jdbc:postgresql://localhost:5433/uds_consent mvn spring-boot:run -pl consent-service -Dspring-boot.run.profiles=local
+```
+
+The container publishes PostgreSQL on **5433**, not the default 5432. Developer machines very
+often already have a PostgreSQL on 5432 — a Homebrew install, another project's container — and
+the failure when they do is a port-bind error if you are lucky and the application quietly
+migrating someone else's database if you are not. Override with `POSTGRES_PORT` if 5433 is taken
+too. To run the service in a container as well:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile app up -d
 ```
 
 The API is then at `http://localhost:8080`, with OpenAPI at `/swagger-ui.html` (ADMIN role).
@@ -68,16 +78,21 @@ mvn test
 mvn verify
 ```
 
-`test` runs the unit suites — 85 cases, no Docker, about two seconds. `verify` adds the
+`test` runs the unit suites — 90 cases, no Docker, about two seconds. `verify` adds the
 integration suites, which need Docker for a real PostgreSQL because the properties they check are
-database properties.
+database properties. **188 tests in total.**
 
 | Suite | What it protects |
 |---|---|
 | `GoldenDecisionSuiteTest` | Every decision rule, per regime, each traceable to a statute. Also runs the same cases through the server engine and the offline evaluator and compares outcome *and* reason |
-| `CaptureValidatorTest` | What makes consent valid at the door: pre-ticked boxes, bundling under PIPA, affirmative action under s.6, parental consent under s.9 |
+| `CaptureValidatorTest` | What makes consent valid at the door: pre-ticked boxes, bundling under PIPA, affirmative action under s.6, parental consent under s.9, and whether the submitting surface is one the group owns |
+| `LedgerStoresIT` | The SQL itself — suppression scope precedence and effective-date windows, quarantine transitions, outbox claim semantics, identifier resolution that does not create subjects as a side effect |
 | `LedgerAppendOnlyIT` | UPDATE, DELETE and TRUNCATE rejected by the database; the chain verified end to end; tampering detected even when a superuser disables the triggers |
 | `ConsentLifecycleIT` | Capture → decide → withdraw → decide; idempotent replay; out-of-order offline sync; TRAI expiry from when the subject acted |
+| `ProvenanceIT` | Imports land quarantined and cannot self-certify; a re-run does not inflate the count; substantiation carries a named reviewer |
+| `NoticeIT` | A notice version reproduced byte-identically years later; a missing translation reported as missing rather than silently answered in English |
+| `RightsRequestIT` | The statutory clock per jurisdiction, breach detection, and the refusal to close a request without a resolution |
+| `RopaIT` | The Record of Processing Activities, including that the export ships its own gaps |
 | `ConsentApiIT` | The API over HTTP with real credentials, including that a dialer's role cannot write consent |
 
 ## Design decisions worth knowing before changing anything
@@ -123,10 +138,16 @@ Named rather than implied, so nobody assumes otherwise:
   RLS driven by the caller's entity claim is Phase 1 work
 - **OIDC.** HTTP Basic with per-client credentials is honest about being a pilot starting point.
   The capability-based role model survives the move to the group's OIDC provider unchanged
-- **Rights portal and grievance SLA tracking.** `rights_request` exists with its statutory clock as
-  a column; the workflow over it is Phase 3
-- **The 22-language notice renderer.** The schema versions notices per language and every consent
-  record points at the exact version rendered; the rendering surface is not here
+- **Rights request *fulfilment*.** Intake, the per-jurisdiction statutory clock and breach alerting
+  are built and tested. What is not built is federated retrieval across DenCRM, the HRMS and the
+  BGV workflow, and the grievance routing over it — Phase 3. The clock landed first deliberately:
+  a request that arrives before anyone can fulfil it becomes a manual job, and manual jobs get
+  done; one that arrives before anyone is counting the days becomes a breach nobody notices
+- **Notice translation.** The serving API, versioning and per-notice coverage reporting are built;
+  nineteen of the twenty-three required languages have no text. That is a procurement task, and
+  the platform's job is to keep the gap visible — `GET /v1/notices/reports/coverage` names it.
+  Deliberately no placeholder rows: `notice_translation` is immutable once written, and a
+  placeholder is indistinguishable from a real notice to whoever reads it
 - **Partitioning `consent_event`.** Deliberately deferred: partitioning would weaken the
   `(entity_id, subject_id, sequence_number)` uniqueness constraint the chain depends on. Revisit
   with real volume data, not before

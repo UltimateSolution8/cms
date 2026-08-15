@@ -17,6 +17,7 @@ import com.uds.consent.policy.jurisdiction.PdpaSingaporeModule;
 import com.uds.consent.policy.jurisdiction.PipaModule;
 import com.uds.consent.policy.jurisdiction.TccprModule;
 import com.uds.consent.policy.port.PolicyPorts;
+import com.uds.consent.service.adapter.CachingApplicationRegistry;
 import com.uds.consent.service.adapter.CachingPurposeCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,8 +87,9 @@ public class PolicyConfiguration {
 
     @Bean
     public CaptureValidator captureValidator(CachingPurposeCatalog purposes,
+                                             CachingApplicationRegistry applications,
                                              List<JurisdictionModule> modules) {
-        return new CaptureValidator(purposes, modules);
+        return new CaptureValidator(purposes, applications, modules);
     }
 
     /**

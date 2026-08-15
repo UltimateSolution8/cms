@@ -60,7 +60,22 @@ public record CaptureViolation(String purposeCode, Code code, String detail) {
         NOTICE_VERSION_NOT_RECORDED,
 
         /** Consent was claimed for a purpose that does not rest on consent in this jurisdiction. */
-        CONSENT_NOT_THE_BASIS
+        CONSENT_NOT_THE_BASIS,
+
+        /**
+         * The submitting surface is unknown to the application registry, or is registered but
+         * decommissioned. Consent whose origin cannot be traced to something the group owns is
+         * consent the group cannot stand behind.
+         */
+        APPLICATION_NOT_REGISTERED,
+
+        /**
+         * The surface is registered to a different group entity than the one it is capturing for.
+         *
+         * <p>What a leaked credential looks like from the inside: every field in the submission is
+         * individually well-formed, and only the relationship between two of them is wrong.
+         */
+        APPLICATION_ENTITY_MISMATCH
     }
 
     public static CaptureViolation of(String purposeCode, Code code, String detail) {

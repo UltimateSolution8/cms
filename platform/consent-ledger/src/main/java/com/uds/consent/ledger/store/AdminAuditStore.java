@@ -49,7 +49,12 @@ public class AdminAuditStore {
         return jdbc.sql("""
                         select actor_id, action, entity_id, target_type, target_id, detail, occurred_at
                           from admin_audit_event
-                         where (:entityId is null or entity_id = :entityId)
+                        -- Cast explicitly. A null bound to a bare parameter reaches PostgreSQL
+                        -- untyped, and it will refuse the statement rather than guess — so the
+                        -- unfiltered call, which is the one that finds group-level actions
+                        -- belonging to no entity, is exactly the one that would fail.
+                         where (cast(:entityId as varchar) is null
+                                or entity_id = cast(:entityId as varchar))
                          order by occurred_at desc
                          limit :limit
                         """)

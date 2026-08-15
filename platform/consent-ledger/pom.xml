@@ -43,5 +43,15 @@
       <artifactId>postgresql</artifactId>
       <scope>runtime</scope>
     </dependency>
+
+    <!-- The stores are SQL. Substituting an in-memory database would test a translation of
+         the queries rather than the queries, and the behaviour that matters here — jsonb
+         handling, the partial indexes, `distinct on`, the append-only triggers — is exactly
+         what a substitute would not reproduce. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>

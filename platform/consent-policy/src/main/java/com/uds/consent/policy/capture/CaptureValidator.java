@@ -27,11 +27,14 @@ import com.uds.consent.core.model.Jurisdiction;
 public class CaptureValidator {
 
     private final PolicyPorts.PurposeCatalog purposes;
+    private final PolicyPorts.ApplicationRegistry applications;
     private final Map<Jurisdiction, List<JurisdictionModule>> modules;
 
     public CaptureValidator(PolicyPorts.PurposeCatalog purposes,
+                            PolicyPorts.ApplicationRegistry applications,
                             List<JurisdictionModule> jurisdictionModules) {
         this.purposes = purposes;
+        this.applications = applications;
         this.modules = new EnumMap<>(Jurisdiction.class);
         for (JurisdictionModule module : jurisdictionModules) {
             this.modules.computeIfAbsent(module.jurisdiction(), k -> new ArrayList<>()).add(module);
@@ -48,6 +51,8 @@ public class CaptureValidator {
     public List<CaptureViolation> validate(CaptureSubmission submission) {
         List<CaptureViolation> violations = new ArrayList<>();
         List<PurposeDefinition> resolved = new ArrayList<>();
+
+        validateApplication(submission, violations);
 
         for (CaptureSubmission.PurposeChoice choice : submission.choices()) {
             Optional<PurposeDefinition> found = purposes.find(choice.purposeCode());
@@ -118,6 +123,62 @@ public class CaptureValidator {
         }
 
         return violations;
+    }
+
+    /**
+     * Checks that the submission came from a surface the group knows about.
+     *
+     * <p>Three ways to fail, and the third is the one worth having:
+     *
+     * <ul>
+     *   <li><strong>Unknown.</strong> Either an integration nobody reviewed, or an attempt to
+     *       manufacture evidence with a stolen credential.</li>
+     *   <li><strong>Inactive.</strong> A decommissioned surface still writing is a surface someone
+     *       forgot to turn off, and its records carry a claim nobody is maintaining.</li>
+     *   <li><strong>Registered to a different entity.</strong> The one a credential leak actually
+     *       looks like: a valid application id used to write consent into another group company's
+     *       ledger. Nothing else in the platform would notice, because every field in the
+     *       submission is individually well-formed.</li>
+     * </ul>
+     *
+     * <p>An <em>absent</em> application id is deliberately not a violation yet. Several surfaces
+     * predate the registry and omit it, and rejecting them would drop real consent on the floor —
+     * the worst possible failure for a control whose entire purpose is preserving evidence.
+     * Tightening this to require an id is the next step, and it wants a survey of what every
+     * surface currently sends before it is taken, not a flag flipped optimistically.
+     */
+    private void validateApplication(CaptureSubmission submission,
+                                     List<CaptureViolation> violations) {
+        String applicationId = submission.applicationId();
+        if (applicationId == null || applicationId.isBlank()) {
+            return;
+        }
+
+        Optional<PolicyPorts.RegisteredApplication> found = applications.find(applicationId);
+        if (found.isEmpty()) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.APPLICATION_NOT_REGISTERED,
+                    "'" + applicationId + "' is not in the application registry. Register the "
+                            + "surface before it submits consent, so that what it captured can "
+                            + "later be traced to something the group owns."));
+            return;
+        }
+
+        PolicyPorts.RegisteredApplication application = found.get();
+        if (!application.active()) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.APPLICATION_NOT_REGISTERED,
+                    "application '" + applicationId + "' is registered but inactive; a "
+                            + "decommissioned surface must not still be writing consent"));
+            return;
+        }
+
+        if (submission.entityId() != null && !submission.entityId().equals(application.entityId())) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.APPLICATION_ENTITY_MISMATCH,
+                    "application '" + applicationId + "' belongs to " + application.entityId()
+                            + " and cannot capture consent for " + submission.entityId()));
+        }
     }
 
     /** Convenience for callers that only need a yes or no. */

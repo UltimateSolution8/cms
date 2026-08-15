@@ -64,6 +64,13 @@ public class SecurityConfiguration {
                         // credential to fetch it would mean a device that lost its credential
                         // also lost the ability to verify snapshots it already holds.
                         .requestMatchers(HttpMethod.GET, "/v1/keys").permitAll()
+                        // A notice is what someone reads before deciding whether to consent.
+                        // Requiring a credential to read it would mean the only people who can
+                        // see what they agreed to are the systems that already hold their data.
+                        // Scoped to the current version and its language list: superseded
+                        // versions are evidence, not public information, and stay ADMIN.
+                        .requestMatchers(HttpMethod.GET, "/v1/notices/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/v1/notices/*/languages").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                         .hasRole("ADMIN")
                         .anyRequest().authenticated())

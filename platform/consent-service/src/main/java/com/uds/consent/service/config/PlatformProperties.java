@@ -117,6 +117,22 @@ public class PlatformProperties {
         /** Chains verified per page during the integrity sweep. */
         private int integrityPageSize = 200;
 
+        /** Whether the rights-request SLA sweep runs. Disabled in tests so time is controlled. */
+        private boolean rightsSlaEnabled = true;
+
+        /** Open requests examined per SLA pass, breached and approaching each. */
+        private int rightsSlaBatchSize = 500;
+
+        /**
+         * How far ahead a deadline is warned about.
+         *
+         * <p>Three days by default, which is a compromise. Korea's ten-day period leaves little
+         * room, so a longer window would warn about requests that have barely been opened; a
+         * shorter one would give an Indian or European request no useful notice at all. Entities
+         * operating predominantly under one regime should set this to suit it.
+         */
+        private Duration rightsSlaWarningWindow = Duration.ofDays(3);
+
         public boolean isExpiryEnabled() {
             return expiryEnabled;
         }
@@ -147,6 +163,30 @@ public class PlatformProperties {
 
         public void setIntegrityPageSize(int integrityPageSize) {
             this.integrityPageSize = integrityPageSize;
+        }
+
+        public boolean isRightsSlaEnabled() {
+            return rightsSlaEnabled;
+        }
+
+        public void setRightsSlaEnabled(boolean rightsSlaEnabled) {
+            this.rightsSlaEnabled = rightsSlaEnabled;
+        }
+
+        public int getRightsSlaBatchSize() {
+            return rightsSlaBatchSize;
+        }
+
+        public void setRightsSlaBatchSize(int rightsSlaBatchSize) {
+            this.rightsSlaBatchSize = rightsSlaBatchSize;
+        }
+
+        public Duration getRightsSlaWarningWindow() {
+            return rightsSlaWarningWindow;
+        }
+
+        public void setRightsSlaWarningWindow(Duration rightsSlaWarningWindow) {
+            this.rightsSlaWarningWindow = rightsSlaWarningWindow;
         }
     }
 
