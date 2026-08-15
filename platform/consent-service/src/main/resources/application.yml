@@ -1,0 +1,141 @@
+spring:
+  application:
+    name: uds-consent-control-plane
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/uds_consent}
+    username: ${DB_USER:uds_consent_app}
+    password: ${DB_PASSWORD:uds_consent_app}
+    hikari:
+      # The decision API is the hot path and must not queue behind the admin console or a
+      # long-running provenance report. Sized for a single instance; raise alongside the
+      # database's own max_connections, never past it.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      pool-name: uds-consent-pool
+
+  flyway:
+    enabled: true
+    # The append-only triggers in V2 and the group taxonomy in V3 are not optional extras —
+    # the platform is not correct without them. Failing to start beats starting without them.
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    # Migrations run as the schema owner; the service runs as a role whose UPDATE and DELETE
+    # privileges on the evidence tables V2 has revoked. They must be different roles, or the
+    # revocation would apply to the account doing the migrating and V2 could not run at all —
+    # and the application would regain the ability to edit history it is not allowed to have.
+    url: ${DB_MIGRATION_URL:${DB_URL:jdbc:postgresql://localhost:5432/uds_consent}}
+    user: ${DB_MIGRATION_USER:uds_consent_owner}
+    password: ${DB_MIGRATION_PASSWORD:uds_consent_owner}
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Every replica must acknowledge. A consent withdrawal that reaches one broker and is
+      # lost in a failover is a withdrawal the group has not honoured.
+      acks: all
+      retries: 5
+
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: uds-consent-control-plane
+
+uds:
+  consent:
+    # Bump whenever the purpose registry or a jurisdiction rule changes, so a decision taken
+    # under the old rules can be identified as such during an audit.
+    policy-version: policy-2026.08.1
+
+    # Must come from the KMS. The service refuses to start without it: the space of Indian
+    # mobile numbers is small enough to enumerate, so unpeppered hashes are reversible.
+    identifier-pepper: ${IDENTIFIER_PEPPER:}
+    default-calling-code: "91"
+
+    snapshot:
+      validity: PT15M
+      signing-key-id: ${SNAPSHOT_KEY_ID:dev-ephemeral}
+      signing-key-base64: ${SNAPSHOT_SIGNING_KEY:}
+      verification-key-base64: ${SNAPSHOT_VERIFICATION_KEY:}
+
+    sweeper:
+      expiry-enabled: true
+      expiry-batch-size: 500
+      expiry-interval: PT5M
+      integrity-enabled: true
+      integrity-page-size: 200
+      integrity-cron: "0 15 2 * * *"
+
+    events:
+      # 'log' needs no broker and is the right default for a developer machine. Switch to
+      # 'kafka' before any downstream system depends on hearing about withdrawals.
+      publisher: ${EVENT_PUBLISHER:log}
+      topic: uds.consent.events
+      relay-batch-size: 200
+      relay-interval: PT2S
+
+    security:
+      clients:
+        # Development credentials only. Real deployments source these from the secret store,
+        # and the destination is the group's OIDC provider rather than Basic auth at all.
+        denave-web:
+          password: ${CLIENT_DENAVE_WEB_PASSWORD:}
+          roles: [CAPTURE]
+        athena-dialer:
+          password: ${CLIENT_ATHENA_DIALER_PASSWORD:}
+          roles: [DECISION]
+        compliance-console:
+          password: ${CLIENT_CONSOLE_PASSWORD:}
+          roles: [ADMIN]
+
+logging:
+  level:
+    com.uds.consent: INFO
+    # Every denial is logged with its reason code. Raise to DEBUG when investigating why a
+    # campaign is being scrubbed harder than expected.
+    com.uds.consent.policy: INFO
+
+---
+# Local development. Everything here is unsuitable for a shared environment and says so.
+spring:
+  config:
+    activate:
+      on-profile: local
+
+uds:
+  consent:
+    identifier-pepper: local-development-pepper-not-for-any-real-data
+    security:
+      clients:
+        denave-web:
+          password: dev
+          roles: [CAPTURE]
+        athena-dialer:
+          password: dev
+          roles: [DECISION]
+        compliance-console:
+          password: dev
+          roles: [ADMIN]
+
+logging:
+  level:
+    com.uds.consent: DEBUG

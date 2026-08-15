@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp \"/Users/home/.claude/plans/we-want-to-build-staged-widget.md\" \"/Users/home/Documents/Files 2/Consent management system/docs/UDS_Consent_Control_Plane_v2_FINAL.md\" && ls -la \"/Users/home/Documents/Files 2/Consent management system/docs/\")"
+    ]
+  }
+}

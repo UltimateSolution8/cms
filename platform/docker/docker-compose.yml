@@ -1,0 +1,71 @@
+# Local development stack.
+#
+# Nothing here is production configuration. Passwords are in the file, TLS is off, and the data
+# volume is disposable. What it does reproduce faithfully is the *role separation* the append-only
+# guarantee depends on: migrations run as an owner role, the application connects as a separate
+# role whose UPDATE and DELETE privileges on the evidence tables have been revoked. A developer
+# machine where everything runs as the owner would silently lose that layer, and the first anyone
+# would hear of it is in a production incident.
+#
+#   docker compose -f platform/docker/docker-compose.yml up -d
+#   cd platform && mvn spring-boot:run -pl consent-service -Dspring-boot.run.profiles=local
+
+name: uds-consent
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: uds-consent-postgres
+    environment:
+      POSTGRES_DB: uds_consent
+      POSTGRES_USER: uds_consent_owner
+      POSTGRES_PASSWORD: uds_consent_owner
+      # Deterministic collation, so that ordering in a developer's database matches the server's.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uds_consent_owner -d uds_consent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    command:
+      - postgres
+      # Log every statement that takes longer than a tenth of a second. The decision API's budget
+      # is 30ms end to end, so anything at this threshold is worth seeing while it is still cheap
+      # to fix.
+      - -c
+      - log_min_duration_statement=100
+
+  # Kafka-compatible broker for the outbox relay. Optional: the service defaults to the logging
+  # publisher and needs no broker at all until a downstream system depends on hearing about
+  # withdrawals. Start it with `--profile events`.
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: uds-consent-redpanda
+    profiles: ["events"]
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:

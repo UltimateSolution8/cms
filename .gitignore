@@ -1,0 +1,25 @@
+# Build output
+target/
+*.class
+*.jar
+*.war
+
+# Secrets and local overrides. Nothing in this repository should ever carry a real
+# identifier pepper, signing key or client credential — those come from the KMS.
+.env
+.env.*
+*.pem
+*.p8
+application-local-secrets.yml
+
+# Local database dumps. A dump of this schema is a dump of regulated personal data.
+*.sql.gz
+*.dump
+dumps/
+
+# Tooling
+.DS_Store
+.idea/
+*.iml
+.vscode/
+.mvn/wrapper/maven-wrapper.jar

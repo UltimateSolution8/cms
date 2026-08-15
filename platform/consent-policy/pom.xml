@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.uds.consent</groupId>
+    <artifactId>uds-consent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>consent-policy</artifactId>
+  <name>Policy and Decision Engine (Enforcement Plane)</name>
+  <description>
+    Jurisdiction policy modules and the single decision point every system asks before processing.
+    Depends only on the core domain and on ports it defines itself, so that the decision logic can
+    be unit-tested exhaustively without a database, a broker or a Spring context.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.uds.consent</groupId>
+      <artifactId>consent-core</artifactId>
+    </dependency>
+    <!-- The logging facade only. No Spring, no JDBC: the decision engine has to stay
+         instantiable in a plain unit test for the golden suite to be worth having. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+  </dependencies>
+</project>

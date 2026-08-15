@@ -1,0 +1,81 @@
+package com.uds.consent.core.decision;
+
+/**
+ * Why processing was denied.
+ *
+ * <p>These codes are part of the platform's public contract. They are logged on every denial and
+ * aggregated in the compliance console, which is how the group learns that (say) forty per cent
+ * of a Denave campaign list is failing on provenance rather than on withdrawal.
+ */
+public enum DenialReason {
+
+    /** Not a denial. */
+    NONE,
+
+    /** No consent interaction has ever been recorded for this subject and purpose. */
+    NO_CONSENT_RECORD,
+
+    /** The subject was asked and declined. */
+    CONSENT_DENIED,
+
+    /** Consent was given and withdrawn. */
+    CONSENT_WITHDRAWN,
+
+    /**
+     * Consent lapsed under the purpose's expiry policy — most often TRAI's seven-day window for
+     * explicit transactional consent, or the end of the contractual relationship supporting
+     * inferred consent.
+     */
+    CONSENT_EXPIRED,
+
+    /** Consent was struck down: superseded notice, failed provenance, or regulator direction. */
+    CONSENT_INVALIDATED,
+
+    /** Two surfaces disagree and the conflict could not be resolved. Raises an alert. */
+    CONSENT_CONFLICTED,
+
+    /** Captured offline and not yet synced, on a purpose that fails closed. */
+    CONSENT_PENDING_SYNC,
+
+    /** Subject is on a statutory do-not-contact registry for this channel. */
+    SUPPRESSED_STATUTORY,
+
+    /** Subject opted out through a UDS surface, or a client supplied the suppression. */
+    SUPPRESSED_OPT_OUT,
+
+    /**
+     * The record came from a bulk load and carries no substantiated provenance. Such records are
+     * quarantined rather than grandfathered.
+     */
+    NO_PROVENANCE,
+
+    /** The purpose code is not in the registry. */
+    PURPOSE_UNKNOWN,
+
+    /** The purpose has been retired and may not be relied on for new processing. */
+    PURPOSE_RETIRED,
+
+    /** The purpose has no lawful basis in the requesting jurisdiction. */
+    PURPOSE_NOT_PERMITTED_IN_JURISDICTION,
+
+    /** The purpose does not permit this channel. */
+    CHANNEL_NOT_PERMITTED,
+
+    /** The subject is under eighteen and the purpose is not permitted for children (DPDP s.9). */
+    CHILD_SUBJECT_RESTRICTED,
+
+    /** The consent on record was given against a notice version since materially superseded. */
+    NOTICE_SUPERSEDED,
+
+    /** The calling application is not authorised for this purpose. */
+    APPLICATION_NOT_AUTHORISED,
+
+    /** The receiving vendor is not authorised for this purpose or data category. */
+    VENDOR_NOT_AUTHORISED,
+
+    /** State was indeterminate and the purpose fails closed. */
+    FAIL_CLOSED_DEFAULT,
+
+    /** The policy engine could not evaluate. Always denies; raises an alert. */
+    POLICY_ERROR
+}

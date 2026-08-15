@@ -1,0 +1,40 @@
+# Integration-test overrides.
+#
+# Everything switched off here is switched off because the test controls it explicitly. A sweeper
+# firing on its own timer mid-assertion would make a suite that fails once a fortnight for reasons
+# nobody can reproduce — which is worse than no suite at all.
+spring:
+  flyway:
+    enabled: true
+    clean-disabled: true
+
+uds:
+  consent:
+    policy-version: policy-integration-test
+    identifier-pepper: integration-test-pepper-not-for-any-real-data
+    sweeper:
+      expiry-enabled: false
+      integrity-enabled: false
+    events:
+      publisher: log
+    # Every client the base configuration declares needs a password here, because the platform
+    # refuses to start with a client that has none — a blank credential is not a permissive
+    # default, it is an account nobody can use and everybody assumes works.
+    security:
+      clients:
+        denave-web:
+          password: capture-secret
+          roles: [CAPTURE]
+        athena-dialer:
+          password: decision-secret
+          roles: [DECISION]
+        compliance-console:
+          password: admin-secret
+          roles: [ADMIN]
+
+logging:
+  level:
+    org.testcontainers: WARN
+    com.zaxxer.hikari: WARN
+    org.flywaydb: INFO
+    com.uds.consent: INFO

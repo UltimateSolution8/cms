@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.uds.consent</groupId>
+    <artifactId>uds-consent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>consent-ledger</artifactId>
+  <name>Consent Ledger (Evidence Plane)</name>
+  <description>
+    Append-only, hash-chained consent ledger and the registries the control plane configures.
+    Append-only is enforced by database triggers and revoked grants, not by application discipline.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.uds.consent</groupId>
+      <artifactId>consent-core</artifactId>
+    </dependency>
+    <!-- Plain JDBC rather than JPA, deliberately. The ledger is append-only SQL with a
+         pessimistic locking read for sequence allocation, and the registries are simple
+         reads; an ORM's identity map and dirty-checking would add a way for a mapped entity
+         to be flushed as an UPDATE against a table whose entire design forbids one. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+  </dependencies>
+</project>
