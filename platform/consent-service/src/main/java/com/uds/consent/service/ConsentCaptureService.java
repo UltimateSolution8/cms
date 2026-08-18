@@ -11,6 +11,7 @@ import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.LegalBasis;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.ledger.service.ConsentLedger;
+import com.uds.consent.ledger.store.ConsentArtefactStore;
 import com.uds.consent.ledger.store.SubjectStore;
 import com.uds.consent.policy.capture.CaptureSubmission;
 import com.uds.consent.policy.capture.CaptureValidator;
@@ -54,15 +55,17 @@ public class ConsentCaptureService {
     private final ConsentLedger ledger;
     private final PlatformMetrics metrics;
     private final SubjectStore subjects;
+    private final ConsentArtefactStore artefacts;
 
     public ConsentCaptureService(CaptureValidator validator, PolicyPorts.PurposeCatalog purposes,
                                  ConsentLedger ledger, PlatformMetrics metrics,
-                                 SubjectStore subjects) {
+                                 SubjectStore subjects, ConsentArtefactStore artefacts) {
         this.validator = validator;
         this.purposes = purposes;
         this.ledger = ledger;
         this.metrics = metrics;
         this.subjects = subjects;
+        this.artefacts = artefacts;
     }
 
     /**
@@ -153,7 +156,7 @@ public class ConsentCaptureService {
                     entityId,
                     subjectId,
                     purposeCode,
-                    purpose.map(PurposeDefinition::version).orElse(0),
+                    withdrawnVersion(entityId, subjectId, purposeCode, purpose),
                     ConsentEventType.WITHDRAWN,
                     purpose.map(p -> p.legalBasisFor(jurisdiction)).orElse(null),
                     null, null, null,
@@ -337,5 +340,26 @@ public class ConsentCaptureService {
         public boolean isAccepted() {
             return violations.isEmpty();
         }
+    }
+
+    /**
+     * The version being withdrawn from — the one the subject actually agreed to.
+     *
+     * <p>Read off the projected artefact rather than the registry. The registry answers "what does
+     * this purpose say today", and a taxonomy change between the grant and the withdrawal makes
+     * that a different question from "what did this person agree to". Stamping the current version
+     * on a WITHDRAWN event writes a statement into the evidence plane that is hash-valid and
+     * untrue, and {@code ReceiptService} then renders that version's wording back to the principal
+     * as the terms they accepted.
+     *
+     * <p>Falls back to the registry, then to zero, where no artefact exists — a withdrawal against
+     * a purpose the subject was never recorded as holding is unusual but not refusable, and
+     * inventing a version for it would be the same error in the other direction.
+     */
+    private int withdrawnVersion(String entityId, String subjectId, String purposeCode,
+                                 Optional<PurposeDefinition> purpose) {
+        return artefacts.find(entityId, subjectId, purposeCode)
+                .map(com.uds.consent.core.model.ConsentArtefact::purposeVersion)
+                .orElseGet(() -> purpose.map(PurposeDefinition::version).orElse(0));
     }
 }

@@ -165,6 +165,60 @@
         }
       }
     },
+    "/v1/admin/propagation/targets" : {
+      "get" : {
+        "tags" : [ "admin-controller" ],
+        "operationId" : "propagationTargets",
+        "parameters" : [ {
+          "name" : "entityId",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "admin-controller" ],
+        "operationId" : "upsertPropagationTarget",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PropagationTargetRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/processing-activities/{id}" : {
       "put" : {
         "tags" : [ "admin-controller" ],
@@ -3021,6 +3075,60 @@
         }
       }
     },
+    "/v1/admin/propagation/gaps" : {
+      "get" : {
+        "tags" : [ "admin-controller" ],
+        "operationId" : "propagationGaps",
+        "parameters" : [ {
+          "name" : "entityId",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "topic",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 200
+          }
+        }, {
+          "name" : "offset",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/Gap"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/integrity/{entityId}/{subjectId}" : {
       "get" : {
         "tags" : [ "admin-controller" ],
@@ -3626,6 +3734,33 @@
           }
         },
         "required" : [ "decides", "name" ]
+      },
+      "PropagationTargetRequest" : {
+        "type" : "object",
+        "properties" : {
+          "entityId" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "topic" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "systemCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "mandatory" : {
+            "type" : "boolean"
+          },
+          "active" : {
+            "type" : "boolean"
+          },
+          "description" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "entityId", "systemCode", "topic" ]
       },
       "Activity" : {
         "type" : "object",
@@ -6330,6 +6465,9 @@
           "entityId" : {
             "type" : "string"
           },
+          "subjectId" : {
+            "type" : "string"
+          },
           "outboxId" : {
             "type" : "integer",
             "format" : "int64"
@@ -6624,6 +6762,42 @@
           }
         }
       },
+      "Gap" : {
+        "type" : "object",
+        "properties" : {
+          "gapId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "entityId" : {
+            "type" : "string"
+          },
+          "subjectId" : {
+            "type" : "string"
+          },
+          "topic" : {
+            "type" : "string"
+          },
+          "systemCode" : {
+            "type" : "string"
+          },
+          "eventType" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string",
+            "enum" : [ "NO_SUBSCRIPTION", "NOT_DELIVERED", "NO_DELIVERY_CHANNEL" ]
+          },
+          "detectedOn" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "detectedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
       "ChainVerification" : {
         "type" : "object",
         "properties" : {
@@ -6807,6 +6981,12 @@
             "type" : "array",
             "items" : {
               "$ref" : "#/components/schemas/Truncation"
+            }
+          },
+          "propagation" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/PropagationRecord"
             }
           },
           "integrity" : {
@@ -7086,6 +7266,46 @@
           },
           "gap" : {
             "type" : "string"
+          }
+        }
+      },
+      "PropagationRecord" : {
+        "type" : "object",
+        "properties" : {
+          "systemCode" : {
+            "type" : "string"
+          },
+          "topic" : {
+            "type" : "string"
+          },
+          "mandatory" : {
+            "type" : "boolean"
+          },
+          "reachable" : {
+            "type" : "boolean"
+          },
+          "delivered" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "failed" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "firstDeliveredAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastDeliveredAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "systemUnmetDays" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "deliveryAttributed" : {
+            "type" : "boolean"
           }
         }
       },

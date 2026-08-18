@@ -17,6 +17,9 @@ import com.uds.consent.ledger.store.NoticeStore;
 import com.uds.consent.ledger.store.ProvenanceStore;
 import com.uds.consent.ledger.store.ReceiptStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
+import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.PropagationGapStore;
+import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.ledger.store.RetentionStore;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.ledger.store.StoredEvent;
@@ -105,13 +108,21 @@ public class EvidenceBundleService {
     private final SubjectStore subjects;
     private final ReconfirmationStore reconfirmations;
     private final RetentionStore retention;
+    private final PropagationTargetStore propagationTargets;
+    private final PropagationGapStore propagationGaps;
+    private final WebhookStore webhooks;
 
     public EvidenceBundleService(ConsentLedger ledger, LedgerIntegrityVerifier verifier,
                                  NoticeStore notices, ReceiptStore receipts,
                                  EnforcementEvidenceStore enforcement, RightsRequestStore rights,
                                  SuppressionStore suppressions, ProvenanceStore provenance,
                                  ConsentManagerStore consentManagers, SubjectStore subjects,
-                                 ReconfirmationStore reconfirmations, RetentionStore retention) {
+                                 ReconfirmationStore reconfirmations, RetentionStore retention,
+                                 PropagationTargetStore propagationTargets,
+                                 PropagationGapStore propagationGaps, WebhookStore webhooks) {
+        this.propagationTargets = propagationTargets;
+        this.propagationGaps = propagationGaps;
+        this.webhooks = webhooks;
         this.ledger = ledger;
         this.verifier = verifier;
         this.notices = notices;
@@ -150,18 +161,19 @@ public class EvidenceBundleService {
         // the data rather than by anybody remembering to check. An empty list is the common case
         // and means the bundle is complete.
         List<Truncation> truncation = new ArrayList<>();
-        List<ReceiptStore.StoredReceipt> receiptsRead = capped(
-                across(ids, id -> receipts.findForSubject(entityId, id, RECEIPT_CAP + 1)),
-                RECEIPT_CAP, "receipts",
-                "GET /v1/receipts?entityId=" + entityId + "&subjectId=" + canonicalId
+        List<ReceiptStore.StoredReceipt> receiptsRead = cappedAcross(ids, RECEIPT_CAP, "receipts",
+                id -> receipts.findForSubject(entityId, id, RECEIPT_CAP + 1),
+                id -> "GET /v1/receipts?entityId=" + entityId + "&subjectId=" + id
                         + "&limit=500&offset=" + RECEIPT_CAP,
                 truncation);
-        List<EnforcementEvidenceStore.Denial> denialsRead = capped(
-                across(ids, id -> enforcement.denials(entityId, id, null, DENIAL_CAP + 1, 0)),
-                DENIAL_CAP, "enforcementDenials",
-                "GET /v1/admin/enforcement/denials?entityId=" + entityId + "&subjectId="
-                        + canonicalId + "&limit=1000&offset=" + DENIAL_CAP,
+        List<EnforcementEvidenceStore.Denial> denialsRead = cappedAcross(ids, DENIAL_CAP,
+                "enforcementDenials",
+                id -> enforcement.denials(entityId, id, null, DENIAL_CAP + 1, 0),
+                id -> "GET /v1/admin/enforcement/denials?entityId=" + entityId + "&subjectId="
+                        + id + "&limit=1000&offset=" + DENIAL_CAP,
                 truncation);
+
+        List<PropagationRecord> propagation = propagation(entityId, ids);
 
         return new Bundle(
                 entityId,
@@ -199,6 +211,9 @@ public class EvidenceBundleService {
                 // which is the guard doing exactly its job on the day it was written.
                 across(ids, id -> retention.forSubject(entityId, id)),
                 List.copyOf(truncation),
+                // Which downstream systems were told about this person, and which were not. Bounded
+                // by the register, so no cap and no truncation entry — see the record's javadoc.
+                propagation,
                 // The surviving chain only. A merge does not join two hash chains — it cannot, and
                 // pretending otherwise is exactly the kind of convenience that makes a ledger stop
                 // being evidence. Each superseded subject's chain remains separately verifiable
@@ -229,26 +244,41 @@ public class EvidenceBundleService {
     }
 
     /**
-     * Trims a section to its cap and, when it had to, records that it did.
+     * Reads a capped section across every id this person is known by, and records what it left out.
      *
      * <p>Detected by asking each store for {@code cap + 1} and seeing whether it came back: one
-     * extra row is enough to know there is more, and it costs nothing. **The total is deliberately
-     * not counted.** A count over an entity-scoped, month-partitioned table under a row-level
-     * security predicate is a scan, paid on every bundle assembled for every principal, to change
-     * "there are more" into "there are 1,347 more" — and the reader's next action is the same
-     * either way, because {@code remainderAt} is the route that answers it.
+     * extra row is enough to know there is more, and it costs nothing. <strong>The total is
+     * deliberately not counted.</strong> A count over an entity-scoped, month-partitioned table
+     * under a row-level security predicate is a scan, paid on every bundle assembled for every
+     * principal, to change "there are more" into "there are 1,347 more" — and the reader's next
+     * action is the same either way, because {@code remainderAt} is the route that answers it.
      *
-     * <p>The cap is applied to the union across merged ids rather than per id. A person whose
-     * history spans two subject ids has one history, and reporting each id's truncation separately
-     * would describe the platform's storage rather than the person the bundle is about.
+     * <p><strong>The cap is applied per id, and that is a correction rather than a preference.</strong>
+     * It used to cap the union and then build one pointer from the canonical id alone. Both stores
+     * query a single {@code subject_id} with no alias expansion, and the bundle's list is a
+     * concatenation by id rather than one ordered sequence — so for a merged principal that pointer
+     * named the wrong id and its offset was measured against a list that never existed. Following
+     * it returned neither the remainder nor anything adjacent to it.
+     *
+     * <p>Rules §9: a pointer is only honest if the route can deliver it. So each id that overflowed
+     * gets its own entry, with the request that actually returns <em>its</em> remainder. A merged
+     * principal is exactly the one most likely to exceed the cap, which is what makes this worth
+     * the extra rows rather than a note. The unmerged case is one id and is unchanged.
      */
-    private static <T> List<T> capped(List<T> read, int cap, String section, String remainderAt,
-                                      List<Truncation> truncation) {
-        if (read.size() <= cap) {
-            return read;
+    private static <T> List<T> cappedAcross(List<String> ids, int cap, String section,
+                                            java.util.function.Function<String, List<T>> lookup,
+                                            java.util.function.Function<String, String> remainderAt,
+                                            List<Truncation> truncation) {
+        List<T> combined = new ArrayList<>();
+        for (String id : ids) {
+            List<T> read = lookup.apply(id);
+            if (read.size() > cap) {
+                truncation.add(new Truncation(section, cap, cap, remainderAt.apply(id)));
+                read = read.subList(0, cap);
+            }
+            combined.addAll(read);
         }
-        truncation.add(new Truncation(section, cap, cap, remainderAt));
-        return List.copyOf(read.subList(0, cap));
+        return List.copyOf(combined);
     }
 
     /**
@@ -387,16 +417,145 @@ public class EvidenceBundleService {
                          List<ReconfirmationStore.Reconfirmation> reconfirmations,
                          List<RetentionStore.Action> retentionActions,
                          List<Truncation> truncation,
+                         List<PropagationRecord> propagation,
                          LedgerIntegrityVerifier.ChainVerification integrity) {
+    }
+
+    /**
+     * Which systems were told about this person's consent changes, and which were not.
+     *
+     * <p><strong>A summary per system, not a log per message</strong>, and the shape is the point.
+     * GDPR Art. 19 limb 2 entitles the principal to be told <em>the recipients</em>; it does not ask
+     * for a delivery journal. Bounded by the propagation register — a handful of rows — so this
+     * section needs no cap and produces no {@link Truncation} entry. An earlier design multiplied an
+     * already-uncapped section by the register size and pointed its remainder at a route with no
+     * subject parameter, which would have rebuilt the exact defect the truncation notice exists to
+     * close, inside the phase that promised not to.
+     *
+     * <p>Every system the entity has registered appears, <strong>including the ones with nothing to
+     * show</strong>. A recipient list that silently omits the systems nobody could reach is the same
+     * false statement as a receipt answering "no recipients" where the truth is that nobody wrote
+     * them down.
+     *
+     * <p><strong>Read the record's javadoc before drawing a conclusion from a zero.</strong> Only
+     * {@code delivered} and {@code failed} are facts about <em>this</em> principal;
+     * {@code systemUnmetDays} is register-level, and {@code deliveryAttributed} distinguishes "not
+     * told" from "told before the platform recorded who". Presenting register-level counts as
+     * per-subject evidence was a live defect in this section for the length of one review cycle.
+     */
+    private List<PropagationRecord> propagation(String entityId, List<String> ids) {
+        List<PropagationTargetStore.Coverage> registered = propagationTargets.coverage(entityId);
+        if (registered.isEmpty()) {
+            // No register, no claim. The same deliberate no-op as an empty fulfilment_target: the
+            // platform will not imply an obligation UDS has not declared.
+            return List.of();
+        }
+
+        // Unioned across merged ids for the same reason every other section is: the ledger is
+        // append-only, so events written before a merge stay under the id they were written
+        // against, and a bundle reading only the canonical id answers with half a person.
+        Map<String, WebhookStore.SubjectDelivery> bySystem = new java.util.LinkedHashMap<>();
+        for (String id : ids) {
+            for (WebhookStore.SubjectDelivery delivery : webhooks.deliveriesForSubject(entityId, id)) {
+                bySystem.merge(delivery.systemCode(), delivery, EvidenceBundleService::combine);
+            }
+        }
+
+        Map<String, Long> occasions = new java.util.LinkedHashMap<>();
+        for (String id : ids) {
+            for (PropagationGapStore.Gap gap : propagationGaps.forSubject(entityId, id)) {
+                occasions.merge(gap.systemCode(), 1L, Long::sum);
+            }
+        }
+
+        List<PropagationRecord> records = new ArrayList<>(registered.size());
+        for (PropagationTargetStore.Coverage target : registered) {
+            WebhookStore.SubjectDelivery delivery = bySystem.get(target.systemCode());
+            records.add(new PropagationRecord(
+                    target.systemCode(),
+                    target.topic(),
+                    target.mandatory(),
+                    target.subscriptionId() != null,
+                    delivery == null ? 0L : delivery.delivered(),
+                    delivery == null ? 0L : delivery.failed(),
+                    delivery == null ? null : delivery.firstAt(),
+                    delivery == null ? null : delivery.lastAt(),
+                    occasions.getOrDefault(target.systemCode(), 0L),
+                    delivery != null));
+        }
+        return List.copyOf(records);
+    }
+
+    private static WebhookStore.SubjectDelivery combine(WebhookStore.SubjectDelivery a,
+                                                        WebhookStore.SubjectDelivery b) {
+        return new WebhookStore.SubjectDelivery(a.systemCode(), a.subscriptionId(),
+                a.delivered() + b.delivered(), a.failed() + b.failed(),
+                earliest(a.firstAt(), b.firstAt()), latest(a.lastAt(), b.lastAt()));
+    }
+
+    private static Instant earliest(Instant a, Instant b) {
+        if (a == null) {
+            return b;
+        }
+        return b == null || a.isBefore(b) ? a : b;
+    }
+
+    private static Instant latest(Instant a, Instant b) {
+        if (a == null) {
+            return b;
+        }
+        return b == null || a.isAfter(b) ? a : b;
+    }
+
+    /**
+     * One downstream system that had to hear about this person, and what can be shown about it.
+     *
+     * @param reachable      whether an active subscription currently carries this system code.
+     *                       <strong>False is the finding</strong>: the group declared this system
+     *                       must be told and nothing can tell it
+     * @param delivered      attempts that arrived. Zero beside a non-zero {@code failed} means the
+     *                       system was written to and never reached — counted apart because a failed
+     *                       attempt must never read as propagation
+     * @param systemUnmetDays days on which this system was recorded as untold — <strong>about some
+     *                        principal's message, not necessarily this one's</strong>. The gap table
+     *                        is deduplicated on {@code (entity, topic, system, day)} and does not
+     *                        include the subject, so the first uncovered message of a day writes the
+     *                        row and later ones are discarded. Admitting the subject to that key
+     *                        would make growth targets × subjects × days, unbounded by population.
+     *                        <p>So this is a <strong>register-level</strong> count reported beside a
+     *                        per-subject record, and a zero here does <em>not</em> mean this
+     *                        principal's withdrawal was propagated. It means no gap row for this
+     *                        system happened to be written on a day when one was needed. The
+     *                        per-principal facts in this record are {@code delivered} and
+     *                        {@code failed}
+     * @param deliveryAttributed whether any delivery row for this system carries this subject at
+     *                        all. <strong>False with {@code delivered == 0} is "we cannot say",
+     *                        not "nobody was told"</strong> — {@code webhook_delivery.subject_id}
+     *                        arrived in {@code V31} and earlier rows are deliberately not
+     *                        backfilled, because a derived guess in append-only evidence is a
+     *                        fabricated fact. Without this flag a principal propagated to in June
+     *                        would read identically to one propagated to never, which is precisely
+     *                        the null-is-not-empty distinction the receipt spends a paragraph on
+     */
+    public record PropagationRecord(String systemCode, String topic, boolean mandatory,
+                                    boolean reachable, long delivered, long failed,
+                                    Instant firstDeliveredAt, Instant lastDeliveredAt,
+                                    long systemUnmetDays, boolean deliveryAttributed) {
     }
 
     /**
      * One section the bundle could not fit, and where the rest of it is.
      *
      * @param section     the bundle field that was cut, by its name in this document
-     * @param returned    how many rows are present here. Equal to {@code cap} by construction —
-     *                    stated anyway, so a reader counting the array and a reader reading this
-     *                    notice cannot reach different conclusions
+     * @param returned    how many rows <em>this entry's subject id</em> contributed to the
+     *                    section. Equal to {@code cap} by construction, because an entry exists
+     *                    only where that id overflowed.
+     *                    <p><strong>It is not the length of the section array</strong>, and the
+     *                    difference is the merged principal: the cap applies per id, so a person
+     *                    merged from three ids can produce three entries while the array holds
+     *                    everything all three returned. A reader counting the array and a reader
+     *                    summing these will agree only when the subject was never merged. Read
+     *                    {@code mergedFrom} on the bundle before drawing a conclusion from either
      * @param cap         the ceiling that applied
      * @param remainderAt the request that returns the remainder, written out with this subject's
      *                    identifiers already in it and the offset already advanced. A pointer a

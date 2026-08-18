@@ -458,6 +458,105 @@ class ReceiptIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("withdrawing after a re-publish does not rewrite the version that was agreed to")
+    void aWithdrawalDoesNotRestateTheTermsItEnds() {
+        // The same defect as above, reached by the other door, and it survived that test because
+        // that test never withdrew.
+        //
+        // ConsentCaptureService.withdraw stamped purposes.find(code).version() — the *current*
+        // registry version — onto the WITHDRAWN event, and ArtefactProjector wrote it straight
+        // onto the artefact. So a taxonomy change landing between the grant and the withdrawal
+        // silently restated the agreement it was ending: grant v1, re-publish v2, withdraw, and
+        // the receipt reads version 2 and renders v2's broadened wording as the terms the
+        // principal accepted.
+        //
+        // Nothing catches this. The ledger still holds the GRANTED event at version 1, the chain
+        // is untouched and every hash verifies — which is precisely the case CLAUDE.md warns is
+        // invisible to an integrity sweep.
+        //
+        // A grant or a modification states terms and brings its own version. A withdrawal ends an
+        // agreement without restating it, and so carries the version forward.
+        String purposeCode = aPurposeOfItsOwn();
+        String subject = grant(purposeCode);
+
+        broadenTo(purposeCode, 2);
+
+        capture.withdraw(ENTITY, subject, List.of(purposeCode), Channel.WEB, APP,
+                ActorType.SUBJECT, subject, Jurisdiction.IN, Instant.now(), "wd-v-" + subject,
+                "withdrawn after the purpose was broadened");
+
+        ConsentReceipt receipt = receipts.issue(ENTITY, subject, Instant.now());
+
+        assertThat(receipt.entries()).singleElement().satisfies(entry -> {
+            assertThat(entry.status()).isEqualTo(ConsentStatus.WITHDRAWN);
+            assertThat(entry.purposeVersion())
+                    .withFailMessage("the withdrawal rewrote the version the subject agreed to")
+                    .isEqualTo(1);
+            assertThat(entry.purposeName())
+                    .withFailMessage("the receipt described v2's broadened scope as what was "
+                            + "consented to, on the document the principal is handed")
+                    .isEqualTo("Receipt fixture purpose v1");
+            assertThat(entry.dataCategories()).containsExactly("CONTACT_BUSINESS");
+            assertThat(entry.sensitive()).isFalse();
+        });
+
+        // The event is evidence in its own right, not only an input to the projection: a WITHDRAWN
+        // row naming a version the subject never held is a false statement in an append-only table.
+        Integer onTheEvent = jdbc.queryForObject(
+                "select purpose_version from consent_event where entity_id = ? and subject_id = ? "
+                        + "and purpose_code = ? and event_type = 'WITHDRAWN'",
+                Integer.class, ENTITY, subject, purposeCode);
+        assertThat(onTheEvent)
+                .withFailMessage("the WITHDRAWN event recorded the registry's current version "
+                        + "rather than the one being withdrawn from")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a refusal states the terms it refuses, and keeps the version it was shown")
+    void aRefusalCarriesTheVersionItWasShown() {
+        // The other half of the same switch, and the one the first fix got wrong.
+        //
+        // Carrying the version forward is right for WITHDRAWN, EXPIRED and INVALIDATED, which end
+        // an agreement without restating it. The first implementation reached those three through
+        // a `default` branch — which also caught DENIED and NOTICE_SERVED, and both of those DO
+        // restate terms: ConsentCaptureService stamps purpose.version() on each.
+        //
+        // So a principal shown the broadened v2 notice and refusing it had their refusal recorded
+        // against v1. The receipt then renders v1's narrower wording, its data categories and its
+        // sensitive flag as what was declined — a document telling the person they refused
+        // something other than what they were actually shown. Same defect as the withdrawal one,
+        // one event type over, and every hash still verifies.
+        String purposeCode = aPurposeOfItsOwn();
+        String subject = grant(purposeCode);
+
+        broadenTo(purposeCode, 2);
+        decline(subject, purposeCode);
+
+        ConsentReceipt receipt = receipts.issue(ENTITY, subject, Instant.now());
+
+        assertThat(receipt.entries()).singleElement().satisfies(entry -> {
+            assertThat(entry.status()).isEqualTo(ConsentStatus.DENIED);
+            assertThat(entry.purposeVersion())
+                    .withFailMessage("the refusal was recorded against a version the subject was "
+                            + "never shown")
+                    .isEqualTo(2);
+            assertThat(entry.purposeName()).isEqualTo("Receipt fixture purpose v2, broadened");
+            // v2 adds GOVERNMENT_ID, which V3 marks sensitive. If the version were carried
+            // forward these would read as v1's — the receipt would understate what was refused.
+            assertThat(entry.dataCategories())
+                    .containsExactlyInAnyOrder("CONTACT_BUSINESS", "GOVERNMENT_ID");
+            assertThat(entry.sensitive()).isTrue();
+        });
+
+        Integer onTheEvent = jdbc.queryForObject(
+                "select purpose_version from consent_event where entity_id = ? and subject_id = ? "
+                        + "and purpose_code = ? and event_type = 'DENIED'",
+                Integer.class, ENTITY, subject, purposeCode);
+        assertThat(onTheEvent).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("a version that has gone leaves the purpose named and undescribed, not misdescribed")
     void aMissingVersionDegradesToThePurposeCodeAlone() {
         // loadVersion returns empty if that row is not there. Nothing in the platform deletes from
@@ -671,6 +770,19 @@ class ReceiptIT extends PostgresIntegrationTest {
                 true, false, true, false),
                 "receipt-it");
         catalogue.refresh();
+    }
+
+    /** Refuses a purpose the subject already answered, later, so it supersedes. */
+    private void decline(String subject, String purposeCode) {
+        ConsentCaptureService.Result result = capture.capture(new CaptureSubmission(ENTITY, subject,
+                Jurisdiction.IN, "en", Channel.WEB, APP, CaptureMethod.CHECKBOX_OPT_IN,
+                ActorType.SUBJECT, subject, NOTICE, 1,
+                List.of(CaptureSubmission.PurposeChoice.declined(purposeCode)), true,
+                Instant.parse("2026-08-16T14:30:00Z"), "rc-deny-" + subject, null, Map.of()));
+
+        assertThat(result.isAccepted())
+                .withFailMessage("refusal rejected: %s", result.violations())
+                .isTrue();
     }
 
     private String grant(String... purposeCodes) {

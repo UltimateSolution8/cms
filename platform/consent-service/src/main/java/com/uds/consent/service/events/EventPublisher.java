@@ -39,4 +39,22 @@ public interface EventPublisher {
     default void publish(String topic, String key, String payload, long outboxId, int attempt) {
         publish(topic, key, payload);
     }
+
+    /**
+     * Whether this publisher leaves evidence that a named system received a message.
+     *
+     * <p>Defaults to <strong>false</strong>, which is the honest answer for the log and Kafka
+     * publishers: neither writes a {@code webhook_delivery} row, and {@code log} is the default and
+     * is what the Denave pilot runs. A broker consumer may be receiving everything perfectly — the
+     * point is that <em>this platform cannot see it</em>.
+     *
+     * <p>{@code PropagationReconciler} reads this to choose between recording
+     * {@code NO_DELIVERY_CHANNEL} and {@code NOT_DELIVERED}. Getting it wrong in the permissive
+     * direction would write, once a day per target, an append-only row asserting that a system was
+     * not told when the truth is that nobody here can know — the same false statement as answering
+     * "no recipients" on a receipt where nobody recorded the recipients.
+     */
+    default boolean writesDeliveryEvidence() {
+        return false;
+    }
 }

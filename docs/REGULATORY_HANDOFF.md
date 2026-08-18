@@ -432,8 +432,12 @@ points. `V3` seeds fifteen entities and sets **neither `dpo_contact` nor `grieva
 them**, while `ReceiptService` puts `dpoContact()` straight onto the ISO/IEC TS 27560 receipt and
 falls back to `grievanceUri()` when the notice carries none. **Every receipt this platform has ever
 issued names a null DPO contact**, and — for any capture whose notice carried no grievance route —
-a null grievance route. Rule 3 requires the principal be given both. That defect was silent because
-a null serialises out of the JSON without complaint.
+a null grievance route. **s.6(3) requires the DPO or authorised-person contact on the consent
+request itself, and Rule 9 requires it published standingly on the site or app and repeated in every
+rights response; Rule 3 carries the notice's Board-complaint link.** That attribution said "Rule 3
+requires both" until Phase 17, which is wrong on the DPO half — recorded here because the
+correction changes who the obligation binds and when, not merely which number is printed. The
+defect itself was silent because a null serialises out of the JSON without complaint.
 
 `EntityStore.resolveContacts` now walks the chain per field, so a subsidiary that publishes its own
 grievance route and shares the group DPO gets both right. `V1`'s comment is corrected in `V22`.
@@ -552,6 +556,123 @@ notice, a client contract or a Board response is the exposure; describing it acc
 
 The next real step beyond this is connectors, and those are a project with the owning teams of
 DenCRM and the HRMS rather than a task on this platform.
+
+---
+
+### 8.6 What `OPERATOR_ASSERTED` has to mean, before a console offers the field
+
+**Owner: UDS compliance. Blocks nothing today, and that is the risk.**
+
+`POST /v1/rights` accepts a `verifiedAs` note. Supplying one records the request as
+`OPERATOR_ASSERTED`; leaving it blank records `UNVERIFIED`. Neither refuses anything — the label is
+deliberately not a gate, because parking requests outside the statutory clock until somebody fills
+in a field produces exactly the outcome Rule 14(3) penalises.
+
+Two things the platform does and does not do, stated so the boundary is not assumed:
+
+- **It does** now require the human behind the credential. An `OPERATOR_ASSERTED` filing without
+  `X-UDS-Actor` is refused, and `admin_audit_event.actor_id` carries the person beside the client.
+  Until Phase 16's closure it recorded the credential alone — one password held by a team — while
+  three artefacts, including `V30`'s own column comment, claimed it named somebody.
+- **It cannot** check the claim. `verification_detail` is free text and the platform has no way to
+  know whether a call-back happened.
+
+**So the standard for what counts as an adequate check does not exist, and the platform cannot
+supply it.** One paragraph is enough — a call-back to a number already on file, an employee ID
+checked at a desk, a document reference — published to whoever will be typing in that field. Without
+it, the first year's data is whatever the first console's placeholder text suggests, and the label
+becomes decoration on a field nobody applied a rule to.
+
+Also UDS's, and it belongs with the above rather than on a dashboard backlog: **watch the share of
+open requests reading `UNVERIFIED`.** The platform can answer the question in one query; nothing
+currently asks it. A control whose output nobody reads is not a control.
+
+*`ROADMAP.md` carries the same item as a one-line acceptance criterion. This is the argument behind
+it — recorded here because CLAUDE.md designates §8 as the list of decisions UDS owns, and two lists
+of the same thing that disagree is how one of them stops being read.*
+
+---
+
+### 8.7 Propagation — who must be told, and the honest limits of the evidence
+
+**The question the platform could not answer.** *A principal withdrew. Prove it reached every
+consuming system.* Until `V31`, it could not — not because the mechanism was missing, but because
+nothing named the systems that were supposed to receive it. `webhook_delivery` proves arrival **at
+subscribers that exist**, and a delivery row is structurally impossible for a system nobody
+registered. So a downstream system that was never subscribed received nothing and left **no trace of
+not having received it**, and `event_outbox.published_at` meant only *"the publisher did not throw"*.
+
+**What the platform now does.** `propagation_target` is the register of systems that must be told,
+per entity and per topic — the structural sibling of §8.5's `fulfilment_target`, and deliberately a
+second register rather than an extension of the first, because they are two different obligations.
+A mandatory target with no active subscription is reported as **uncovered**, on an admin route, on
+`/actuator/health`, and on `uds.consent.propagation.uncovered`, which a critical alert watches.
+Separately, `propagation_gap` records, append-only and once per system per day, the obligations the
+platform could not show were met.
+
+**Three things this register does not claim, each of which UDS needs to know before relying on it.**
+
+1. **Propagation is evidenced on the webhook channel only.** `webhook_delivery` is written by the
+   webhook publisher and by nothing else. Under the `log` publisher — which is the default and what
+   the pilot runs — and under `kafka`, the platform has **no way to observe** whether a downstream
+   system received anything. It records `NO_DELIVERY_CHANNEL` in that case and does **not** record
+   "not delivered", because a Kafka consumer may be processing everything perfectly and asserting
+   otherwise would be a false statement in an append-only table. *Switching the publisher to
+   `webhook` is what turns this register from a configuration check into evidence.*
+2. **`rights.verification.requested` cannot be covered at all.** `PrincipalPortalService` enqueues it
+   keyed on the request reference alone, with no entity and no subject in the key, so it can never
+   route to a subscription and can never be reconciled. This is separate from the missing consumer
+   already on `ROADMAP.md`: even once that consumer exists, this topic is **structurally** outside
+   the register. Recorded here because it was unrecorded anywhere until Phase 17.
+3. **A gap row names one principal per system per day, not every affected one.** The record is
+   deduplicated on `(entity, topic, system, day)` so its growth stays bounded by the register rather
+   than by population. It answers *"was this obligation unmet on that day"* — a register-level fact.
+   It does **not** answer *"was this person's withdrawal propagated"*, and nothing built on it should
+   be read as if it did.
+4. **Two streams can be registered, and one cannot.** `uds.consent.events` and
+   `uds.consent.retention` both carry an entity in their key and are registrable.
+   `rights.verification.requested` is keyed on the request reference alone, carries no entity, and can
+   never route to a subscription — separate from the missing consumer already on `ROADMAP.md`, and
+   unrecorded anywhere until Phase 17.
+5. **The erasure *act* stays with §8.5.** DPDP s.8(7)(b) — *"cause its Data Processor to erase"* — is
+   discharged by `fulfilment_target` and its evidence, not here. This register is about
+   **notification of a consent-state change**: s.6(6)'s *"cease and cause its Data Processors to
+   cease processing"*, and GDPR Art. 19's duty to communicate to each recipient. Two registers for
+   one obligation is how both stop being filled.
+
+**On DPDP specifically, and this is a position rather than a gap.** DPDP has **no Art. 19 analogue**.
+Neither the Act nor the Rules 2025 require a fiduciary to *demonstrate* that cessation reached a
+processor, to notify third-party recipients generally, or to tell the principal who they were. The
+evidence this register produces therefore **exceeds what DPDP asks**. It is built because GDPR Art. 19
+and Art. 5(2) do ask, and because "we told them" without a record is the claim the group would
+otherwise have to make. Do not let it be described as a DPDP requirement.
+
+**An empty register reports nothing, and this is the state today.** No entity has a propagation
+target configured, so the gauge reads zero and nothing is recorded — which is indistinguishable, on
+the instruments, from complete coverage. The same deliberate no-op as §8.5, and the same reason this
+needs a signature rather than a commit.
+
+---
+
+**Scope statement — for UDS to complete and sign.**
+
+| Topic | System | Mandatory? | Who owns the integration | Endpoint, or why not | Signed |
+|---|---|---|---|---|---|
+| `uds.consent.events` | `DENCRM` | | | | |
+| `uds.consent.events` | `ATHENA_DIALER` | | | | |
+| `uds.consent.retention` | | | | | |
+
+Two operational notes for whoever fills this in:
+
+- **`system_code` must match on both sides, exactly and in upper case.** The register joins
+  `propagation_target.system_code` to `webhook_subscription.system_code`; a target for `DENCRM`
+  against a subscription labelled `DENCRM_PROD` produces a permanent phantom gap. `GET
+  /v1/admin/propagation/targets` returns the subscription resolved against each target, so a
+  mismatch is visible on that page rather than only in the gap table.
+- **A persistently failing endpoint produces no gap rows.** A message that fails to deliver stays
+  unpublished, so the reconciler never runs for it; it surfaces instead as `FAILED` rows in
+  `webhook_delivery` and as the relay's alert after ten attempts. The two artefacts answer different
+  questions, and neither one alone answers *"is DenCRM current?"*
 
 ---
 

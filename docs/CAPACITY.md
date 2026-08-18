@@ -300,16 +300,29 @@ that a password is being checked on every machine-to-machine request in a hot pa
 
 ### And one security finding that came out of the same measurement
 
-**The rate limiter sits behind authentication, so it cannot protect the most expensive thing in the
-request path.** `RateLimitFilter` is `@Order(Ordered.LOWEST_PRECEDENCE - 120)`, which places it after
-Spring Security's chain (order -100). Five hundred concurrent requests bearing deliberately invalid
-credentials returned **500 × 401 and not one 429** — every one of them paying the full ~110 ms of
-BCrypt before reaching the filter that exists to refuse them.
+> **Closed in Phase 16 (18 August 2026), and this section is kept rather than deleted because two
+> other documents cite §7 as the authority on it.** What follows describes the state on 17 August.
+> `PreAuthRateLimitFilter` now runs at `SecurityProperties.DEFAULT_FILTER_ORDER - 10` (−110), ahead
+> of Spring Security's chain, keyed by client address alone with one loose ceiling; the ordering is
+> asserted by `PreAuthRateLimitIT.theRefusalPrecedesAuthentication`, which requires **429 and not
+> 401** and so cannot pass with the filter behind authentication.
+>
+> **The ~110 ms figure below has not been re-measured since.** The test proves *ordering*, which is
+> the property that matters, and does not prove *cost*. Saying so is the difference between this
+> correction and a second unverified claim. The paragraph after it — every configured ceiling
+> sitting above measured capacity — is untouched by Phase 16 and is still true.
 
-That is an unauthenticated CPU-exhaustion path: roughly **fifty junk requests per second saturate an
-eight-core instance**, and no credential is required to send them. The limiter itself works
-correctly — 3,541 of 4,000 refused at 200 rps on the public route, counted in
-`uds_consent_ratelimit_refused_total{route="PUBLIC"}` — it is purely a matter of where it sits.
+**The rate limiter sat behind authentication, so it could not protect the most expensive thing in
+the request path.** `RateLimitFilter` is `@Order(Ordered.LOWEST_PRECEDENCE - 120)`, which places it
+after Spring Security's chain (order -100). Five hundred concurrent requests bearing deliberately
+invalid credentials returned **500 × 401 and not one 429** — every one of them paying the full
+~110 ms of BCrypt before reaching the filter that existed to refuse them.
+
+That was an unauthenticated CPU-exhaustion path: roughly **fifty junk requests per second saturate
+an eight-core instance**, and no credential was required to send them. The per-credential limiter
+itself works correctly — 3,541 of 4,000 refused at 200 rps on the public route, counted in
+`uds_consent_ratelimit_refused_total{route="PUBLIC"}` — it was purely a matter of where it sat, and
+it still sits there deliberately: it is the fairness limit, and it needs the credential.
 
 Worth adding: **every configured rate-limit ceiling is above the measured single-request capacity.**
 `decision` is 200/s against a measured ~50/s. A limiter whose threshold is four times what the

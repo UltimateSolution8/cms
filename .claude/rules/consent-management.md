@@ -52,14 +52,28 @@ either an invariant or a pointer.
   reads the protected set out of `information_schema`, so it starts failing on its own when one is
   missed. That failure is the test working — cover the table, do not edit the test.
 
-## 3. Subsidiary overrides: nearest ancestor wins
+## 3. Subsidiary overrides: one walk exists, and it is narrower than this section used to claim
 
-The group is a hierarchy (`fiduciary_entity` parent link) and a subsidiary inherits from it. One
-pattern, walked by recursive CTE in `PurposeRegistryStore` and exposed through
-`CachingPurposeCatalog`: **the nearest ancestor with a value for that `purpose_code` wins.** Entity
-contacts (`dpo_contact`, `grievance_uri`) resolve the same way — which is why one statement on the
-`UDS` row fixes all fifteen entities' receipts. Anything new that a subsidiary may override uses this
-pattern. Do not invent a second one.
+The group is a hierarchy (`fiduciary_entity` parent link). **Exactly one thing inherits along it:
+entity contacts.** `EntityStore.inheritanceChain` walks the parent link as an ordinary Java loop
+bounded at ten hops, and its only caller is `resolveContacts` — which is why one statement of
+`dpo_contact` and `grievance_uri` on the `UDS` row fixes all fifteen entities' receipts.
+
+**Purposes do not inherit, deliberately.** This section asserted for three phases that they did,
+"walked by recursive CTE in `PurposeRegistryStore` and exposed through `CachingPurposeCatalog`,
+nearest ancestor winning on `purpose_code`". Every clause of that was false: there is no recursive
+CTE anywhere in the platform, `PurposeRegistryStore` has no `entity_id` column and no ancestor
+logic, `CachingPurposeCatalog` has no entity dimension, and **there is no per-entity purpose
+configuration to inherit in the first place** — `docs/REGULATORY_HANDOFF.md` §8.2 records that
+resolution explicitly, and notes that building what the comment described would have meant
+entity-scoping the purpose registry to satisfy a comment. The claim had already been re-cited in
+five other documents, including a standards note that named *this section* as its authority.
+Corrected in Phase 16's closure, C6.
+
+So: if something new genuinely needs to vary by subsidiary, `EntityStore`'s walk is the shape to
+follow and there is no second one to avoid inventing — but **check first whether the thing being
+overridden is per-entity at all.** That was the actual mistake here, and it is the more expensive
+one.
 
 ## 4. Withdrawal is not finished at the ledger
 
@@ -70,6 +84,22 @@ pattern. Do not invent a second one.
 - Then outward: the outbox carries it, `WebhookPublisher` delivers it HMAC-signed, and
   `webhook_delivery` is the row that proves it arrived. **A propagation path with no delivery evidence
   is a violation nothing records** — that is the defining CMP function, not a nicety.
+- **That sentence only became true in Phase 17, and it needs the register to stay true.**
+  `webhook_delivery` proves arrival *at subscribers that exist*; it is structurally impossible for a
+  system nobody registered, so before `V31` an unregistered downstream system left no trace of not
+  having been told, and `event_outbox.published_at` meant "the publisher did not throw". The register
+  is `propagation_target` (who must hear, per entity and topic) against `webhook_subscription`
+  (how they are reached, joined on `system_code`, **upper case on both sides**).
+  **Current state and evidence are deliberately separate and must stay so.** `uncovered` is derived
+  from the register — bounded, and it returns to zero when configuration is fixed, which is what
+  makes it alertable. `propagation_gap` is append-only history, one row per system per day, and
+  **nothing alerts on it**: a count that can only grow fires forever and is muted within a week.
+- **The gap's `reason` records an observation, never a conclusion.** `NO_DELIVERY_CHANNEL` means the
+  configured publisher writes no delivery evidence at all — `log` (the default) and `kafka` — and
+  writing `NOT_DELIVERED` there would assert that a system was not told when the platform has no way
+  to know. Same class of false statement as answering "no recipients" on a receipt where nobody
+  recorded them. And `NOT_DELIVERED` requires the absence of a **`DELIVERED`** row: a `FAILED` row is
+  an attempt, not an arrival.
 - Suppression lookups go through `SuppressionStore`; a scope value outside `SuppressionScope` is
   silently ignored rather than rejected, which is how the load seed measured the allow path under the
   name of the deny path for a whole phase.
@@ -95,10 +125,15 @@ did.
   unqualified for three phases and was never true of `POST /v1/rights`, where `receivedAt` is
   supplied by the caller. What is true everywhere is weaker and is the invariant now: **the start
   instant is bounded and its provenance is recorded.** A `receivedAt` in the future is refused
-  (`ClockTolerance.SKEW`) because it moves the deadline outward; one older than
-  `uds.consent.rights.max-backdate` is refused because it files a request already in breach; and
-  `rights_request.verification_method` says whether it was `PORTAL_TOKEN`-verified,
-  `OPERATOR_ASSERTED`, or `UNVERIFIED`.
+  (`ClockTolerance.SKEW`) because it moves the deadline outward — that one is a real compliance
+  hole. One older than `uds.consent.rights.max-backdate` is refused as a **sanity bound only**, and
+  the reason written here for three phases ("it files a request already in breach") was false: every
+  period the platform computes is shorter than the bound, so a late filing inside it is accepted and
+  *is* overdue on arrival. **That is the correct outcome** — a letter found in a postbag is a real
+  filing — and the fact is recorded as `bornOverdue` on the audit event instead of being refused.
+  `rights_request.verification_method` says whether the start was `PORTAL_TOKEN`-verified,
+  `OPERATOR_ASSERTED`, or `UNVERIFIED`; **`OPERATOR_ASSERTED` requires `X-UDS-Actor`**, because it
+  claims a person checked and §5 applies.
 - **`UNVERIFIED` refuses nothing, and that is deliberate.** The label is not a gate: parking requests
   outside the clock until somebody fills in a field produces the outcome Rule 14(3) actually
   penalises. Same posture as the empty `fulfilment_target` register — record the silence, never let
@@ -111,7 +146,7 @@ did.
 
 ## 7. Migrations
 
-`V1`–`V30` exist in `platform/consent-ledger/src/main/resources/db/migration/`; next is **`V31`**.
+`V1`–`V31` exist in `platform/consent-ledger/src/main/resources/db/migration/`; next is **`V32`**.
 Removing a table is worse than not running code — speculative surface is flagged dark and the
 migration stays. New entity-scoped table ⇒ `entity_id`, an RLS policy on `uds_entity_claim()`
 following V13's shape, an index, and a prefix in `EntityAccessGuard` if it has an entity-bearing

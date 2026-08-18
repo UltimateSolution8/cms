@@ -105,6 +105,45 @@ class ObservabilityIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("the metrics an alert rule names actually exist under those names")
+    void everyAlertedMeterIsRegistered() {
+        // deploy/observability/alerts.yaml fires on these by their Prometheus names. A meter that
+        // is never registered makes its rule permanently silent, and a rule that cannot fire looks
+        // exactly like a condition that never occurs — which is how a control stops existing
+        // without anybody noticing. The same shape as the OTLP endpoint bound under a key Spring
+        // never read: assert the thing exists, not that somebody wrote the name down.
+        assertThat(registry.find("uds.consent.propagation.uncovered").gauge())
+                .withFailMessage("PropagationTargetUnreachable is a critical rule over a gauge "
+                        + "that is not registered, so it can never fire")
+                .isNotNull();
+        assertThat(registry.find("uds.consent.propagation.failed_writes").gauge()).isNotNull();
+        assertThat(registry.find("uds.consent.rights.unverified_open").gauge())
+                .withFailMessage("V30 built the index for this question and UnverifiedRightsRequestsOpen "
+                        + "alerts on it; the gauge that answers it is missing")
+                .isNotNull();
+    }
+
+    @Test
+    @DisplayName("propagation coverage is a health detail and never a DOWN condition")
+    void propagationIsReportedWithoutTakingTheInstanceOutOfService() {
+        // OPERATIONS.md §4.0a tells an operator to read propagationUncovered off /actuator/health.
+        // If the key is not there, the instruction names something that does not exist — this
+        // programme's third-most-common defect, and one it has shipped three times.
+        ResponseEntity<String> response = management("/actuator/health");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .withFailMessage("OPERATIONS.md §4.0a instructs the reader to find "
+                        + "propagationUncovered here, and it is absent")
+                .contains("propagationUncovered");
+
+        // The only DOWN condition is a broken chain. Draining a healthy instance because a
+        // downstream system is unregistered would turn an evidence problem into an availability
+        // one, for every entity at once.
+        assertThat(response.getBody()).contains("\"status\":\"UP\"");
+    }
+
+    @Test
     @DisplayName("every response carries a correlation id")
     void aCorrelationIdComesBackOnEveryCall() {
         ResponseEntity<String> response = rest.getForEntity(

@@ -27,6 +27,36 @@ for every phase. Read it for the argument; read this to find out which argument 
   both the filter and the connection preparer, because two layers are only two layers if they agree
   about who the caller is. *`EntityAccessGuard` Javadoc; PLAN Phase 11, defect 1.*
 
+- **Propagation state is split from propagation evidence**, in two places rather than one table.
+  A single table answering both could never return to zero: a message published before a
+  subscription existed is never re-published, so a "still open?" count would have been permanently
+  non-zero, the critical alert would have fired for the life of the database, and it would have been
+  muted inside a week. Current state is derived from the register — bounded, and it clears when
+  configuration is fixed; `propagation_gap` is append-only history that **nothing alerts on**.
+  *Plan §R D1.*
+- **A propagation gap records a reason, never a conclusion.** `webhook_delivery` is written only by
+  the webhook publisher, so under `log` (the default) and `kafka` the platform cannot observe
+  delivery at all. Writing `NOT_DELIVERED` there would assert a system was not told when the truth
+  is that nobody here can know — the same false statement as answering "no recipients" on a receipt
+  where nobody recorded them. Hence `NO_DELIVERY_CHANNEL`. *Plan §R D2; handoff §8.7.*
+- **One gap row per system per day, not per event.** `propagation_gap` is partitionable where
+  `consent_event` is not — but the unique key that makes it idempotent under three concurrent relays
+  would have to include the partition key, at which point a retry crossing a month boundary is
+  accepted twice. That is `V28`'s trap exactly, so the rows are bounded instead of partitioned.
+  *Plan §R D12.*
+- **The reconciler runs after `markPublished`.** Between `publish` and `markPublished` a throwing
+  evidence write would land in the relay's catch block, mark the message failed, and cause **a second
+  POST downstream because recording a gap failed**. It also swallows its own failures and counts
+  them, for the same reason. *Plan §R D10.*
+- **The outbox relay stays outside `SweepLock`.** Putting it under the sweep lock would serialise
+  fan-out onto one instance — a throughput change Phase 17 had no business making. Idempotency comes
+  from the daily unique key; `for update skip locked` on `fetchUnpublished` is the real fix and is
+  scheduled as its own change with its own test. *`ROADMAP.md`; plan §P2a.*
+- **Propagation targets do not inherit down the entity hierarchy**, stated in the migration header
+  and the store javadoc rather than left to be inferred — because rules §3 is the most misread
+  section in that file, and Phase 16's C6 found a false inheritance claim had propagated into seven
+  documents over three phases, including the reviewer agent's own checklist. *`V31` header.*
+
 ## Regulatory posture
 
 - **Korea Art. 62-3 re-confirmation is dark** behind `uds.consent.features.korea-reconfirmation` — the
@@ -43,8 +73,12 @@ for every phase. Read it for the argument; read this to find out which argument 
 - **`FULFILLED` is gated on evidence** — every mandatory `fulfilment_target` needs a terminal
   `rights_fulfilment_action`; the platform is intake, clock, gate and evidence, and the *acts* happen in
   named systems under a named SOP. *V26; `REGULATORY_HANDOFF.md` §8.5.*
-- **Contacts and purposes inherit up the entity hierarchy, nearest ancestor winning** — one statement on
-  the `UDS` row fixes all fifteen entities' receipts. *PLAN Phase 10, W8.*
+- **Entity contacts inherit up the hierarchy, nearest ancestor winning; purposes do not** — one
+  statement of `dpo_contact` and `grievance_uri` on the `UDS` row fixes all fifteen entities' receipts,
+  by an iterative walk in `EntityStore`. This line said "contacts *and purposes*" for three phases and
+  the purposes half was never true: there is no per-entity purpose configuration to inherit, and
+  `REGULATORY_HANDOFF.md` §8.2 records why building one to match a comment was refused.
+  *PLAN Phase 10 W8; corrected Phase 16 closure, C6.*
 - **The receipt's standards claim is stated against what was actually read** — the ISO/IEC TS 27560 text
   is paywalled and not held, so conformance is claimed against the free W3C DPV rendering and named as
   such. *`docs/standards/README.md`; PLAN Phase 14 G2.*
@@ -112,11 +146,14 @@ for every phase. Read it for the argument; read this to find out which argument 
   clock until somebody fills in a field produces the outcome Rule 14(3) penalises. Record the silence;
   do not let it read as diligence. The V30 backfill defaults to `UNVERIFIED` for the same reason: any
   other default would write a claim of verification that never happened. *PLAN Phase 16, N1.*
-- **`receivedAt` is bounded in both directions, and only the past bound is configurable** — forward
-  beyond `ClockTolerance.SKEW` is refused because it moves the deadline outward; backward beyond
-  `uds.consent.rights.max-backdate` because it files a request already in breach. The forward window is
-  a shared constant rather than a setting: two definitions of "now" inside one evidence plane is not
-  something to make configurable. *PLAN Phase 16, N1.*
+- **`receivedAt` is bounded in both directions, and the two bounds do different jobs** — forward
+  beyond `ClockTolerance.SKEW` is refused because it moves the deadline outward, which is a real
+  compliance hole; backward beyond `uds.consent.rights.max-backdate` is a **sanity window only**, and
+  the claim that it prevents "a request already in breach" was false for three phases — every computed
+  period is shorter than the bound, so a late filing inside it is accepted and *is* overdue. That is
+  the right outcome, and the fact is recorded as `bornOverdue` on the audit event instead. The forward
+  window is a shared constant rather than a setting: two definitions of "now" inside one evidence plane
+  is not something to make configurable. *PLAN Phase 16, N1 and C1.*
 - **No group-level evidence bundle route** — assembling one person across fifteen entities would have
   to bypass `EntityAccessGuard` and the RLS session claim simultaneously, which is the hole Phase 11
   spent a defect learning to close. The fifteen-call assembly is an SOP instead, and an SOP is weaker

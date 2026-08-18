@@ -28,8 +28,12 @@ somebody believes the code does, and this programme has repeatedly found the two
 5. **Append-only survives.** Does the design need an `UPDATE` on evidence? If so it is the wrong shape
    — mutable state and evidence are different tables (`rights_request_verification` versus
    `rights_request` is the pattern that got this right).
-6. **Inheritance uses the existing pattern.** Nearest ancestor wins, recursive CTE. A second
-   inheritance mechanism is a defect even if it works.
+6. **Inheritance — check whether the thing inherits at all before checking how.** Exactly one walk
+   exists: `EntityStore.inheritanceChain`, an iterative loop over the `fiduciary_entity` parent link,
+   serving entity contacts and nothing else. **Purposes do not inherit** (rules §3, corrected in
+   Phase 16's closure — this checklist previously said "nearest ancestor wins, recursive CTE", and
+   no recursive CTE has ever existed in this platform). So a design proposing per-subsidiary
+   override is proposing a *build*; review it as one, and follow `EntityStore`'s shape.
 7. **Scale and unbounded growth**, and the partition-key constraint that stopped `consent_event`.
 8. **What it does not license.** Say what the design leaves open, and whether that gap is recorded
    anywhere a reader would find it.

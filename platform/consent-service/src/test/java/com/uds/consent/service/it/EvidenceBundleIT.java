@@ -8,6 +8,7 @@ import com.uds.consent.core.model.SuppressionScope;
 import com.uds.consent.core.model.SuppressionSource;
 import com.uds.consent.ledger.store.AdminAuditStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
+import com.uds.consent.core.model.IdentifierType;
 import com.uds.consent.ledger.store.SubjectStore;
 import com.uds.consent.ledger.store.SuppressionStore;
 import com.uds.consent.policy.capture.CaptureSubmission;
@@ -196,6 +197,58 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("for a merged principal the pointer names the id that actually holds the remainder")
+    void truncationPointsAtTheIdThatOverflowed() {
+        // The merged principal is the one most likely to exceed the cap, and was the one the
+        // pointer was wrong for. The cap was applied to the union across every merged id and the
+        // pointer was then built from the canonical id alone — but ReceiptStore.findForSubject
+        // queries a single subject_id with no alias expansion, and the bundle's list is a
+        // concatenation by id rather than one ordered sequence. So offset=100 was measured against
+        // a list that never existed on either side, and following it returned neither the
+        // remainder nor anything adjacent to it.
+        //
+        // Rules §9: a pointer is only honest if the route can deliver it. The cap is now applied
+        // per id, and each id that overflowed gets the request that returns *its* remainder.
+        // Through the identifier path, because a merge needs real subject rows — grant() writes
+        // events against a bare id and SubjectStore refuses to merge one that does not exist.
+        String canonical = subjects.resolveOrCreate(ENTITY, IdentifierType.EMAIL,
+                "eb-canon-" + UUID.randomUUID());
+        String superseded = subjects.resolveOrCreate(ENTITY, IdentifierType.PHONE,
+                "eb-super-" + UUID.randomUUID());
+
+        // The overflow sits under the superseded id, deliberately — that is the case the old
+        // pointer could not express at all, because it never named that id.
+        for (int i = 0; i <= EvidenceBundleService.RECEIPT_CAP; i++) {
+            receipts.issue(ENTITY, superseded, Instant.now());
+        }
+        receipts.issue(ENTITY, canonical, Instant.now());
+
+        subjects.merge(ENTITY, superseded, canonical, "it-operator",
+                "same principal, confirmed for the truncation fixture");
+
+        EvidenceBundleService.Bundle bundle =
+                bundles.assemble(ENTITY, canonical, Instant.now());
+
+        assertThat(bundle.truncation())
+                .withFailMessage("the merged id's overflow was not declared at all")
+                .singleElement()
+                .satisfies(cut -> {
+                    assertThat(cut.section()).isEqualTo("receipts");
+                    assertThat(cut.remainderAt())
+                            .withFailMessage("the pointer named the canonical id, which is not "
+                                    + "where the truncated rows are")
+                            .contains("subjectId=" + superseded)
+                            .doesNotContain("subjectId=" + canonical);
+                });
+
+        // The assertion that makes it more than a string comparison: run what the pointer says.
+        assertThat(receipts.forSubject(ENTITY, superseded, 500, EvidenceBundleService.RECEIPT_CAP))
+                .withFailMessage("the pointer resolves to nothing, which is the defect the "
+                        + "truncation notice exists to avoid rather than to commit")
+                .isNotEmpty();
+    }
+
+    @Test
     @DisplayName("a bundle that fits carries no truncation notice at all")
     void anUntruncatedBundleIsSilent() {
         // The common case, and the one that makes the notice above mean something. A truncation
@@ -329,6 +382,19 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
                 Map.entry("subject_age_assertion", "bundle.ageAssertions()"),
                 Map.entry("consent_reconfirmation", "bundle.reconfirmations()"),
                 Map.entry("retention_action", "bundle.retentionActions()"),
+                // Carried as a summary rather than row by row, and the shape is deliberate. GDPR
+                // Art. 19 limb 2 entitles the principal to be told the RECIPIENTS, not to a
+                // per-message delivery journal — and a per-message section would be an uncapped
+                // list multiplied by the size of the propagation register, whose truncation
+                // pointer would then have to name a route that can page it. That is the defect
+                // the truncation notice exists to close, so the section is bounded by the
+                // register instead: one row per registered system, no cap, no pointer.
+                Map.entry("webhook_delivery", "bundle.propagation(), summarised per system: "
+                        + "delivered and failed counts with first and last instants"),
+                Map.entry("propagation_gap", "bundle.propagation(), summarised per system as "
+                        + "systemUnmetDays — and labelled register-level on the record, because "
+                        + "the gap table is deduplicated per day without the subject, so it is not "
+                        + "per-principal evidence and the bundle must not present it as such"),
                 // Absent, deliberately, and here is why for each.
                 Map.entry("consent_chain_head", "not carried as rows: it is the chain tip, and what "
                         + "a reader needs from it is bundle.integrity(), which verifies against it"),

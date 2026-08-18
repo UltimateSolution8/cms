@@ -20,7 +20,7 @@ public record CaptureViolation(String purposeCode, Code code, String detail) {
         PRE_SELECTED_OPTION,
 
         /**
-         * Refusing was not offered as plainly as accepting. DPDP s.6(6) requires withdrawal to be
+         * Refusing was not offered as plainly as accepting. DPDP s.6(4) requires withdrawal to be
          * as easy as giving, and Rule 8's bar on disguised refusal carries the same intent into
          * the initial interaction.
          */

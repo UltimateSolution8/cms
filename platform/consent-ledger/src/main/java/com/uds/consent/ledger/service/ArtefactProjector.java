@@ -144,11 +144,38 @@ public class ArtefactProjector {
                 ? event.occurredAt()
                 : (previous == null ? null : previous.withdrawnAt());
 
+        // The version the principal agreed to, carried forward — not the one the registry holds
+        // today. WITHDRAWN, EXPIRED and INVALIDATED end an agreement without restating it, so the
+        // version on the artefact must stay the one that was agreed.
+        //
+        // Taking the event's version on those three would let a taxonomy change landing between
+        // the grant and the withdrawal rewrite what the receipt says the principal consented to,
+        // because ReceiptService loads the purpose definition at the artefact's version and
+        // renders that text. The ledger would still hold the truth and every hash would still
+        // verify, which is exactly why nothing would catch it.
+        //
+        // The three are enumerated rather than reached through `default`, and that is the whole
+        // correction: a `default` branch also caught DENIED and NOTICE_SERVED, both of which DO
+        // restate terms. Each stamps `purpose.version()` at write time — a refusal is a refusal of
+        // the terms the person was actually shown, and re-serving a notice is the platform stating
+        // the current ones. Carrying an older version onto either would put a version the person
+        // was never shown onto their receipt, which is the same defect one event type over.
+        //
+        // EXPIRED and INVALIDATED are written with `purposeVersion = 0` (ExpirySweeper,
+        // ConsentCaptureService.invalidate) — a sentinel meaning "no version asserted", which is
+        // the second reason the carry-forward is right for them and would be wrong for the two
+        // that assert one.
+        int purposeVersion = switch (event.type()) {
+            case WITHDRAWN, EXPIRED, INVALIDATED ->
+                    previous == null ? event.purposeVersion() : previous.purposeVersion();
+            case GRANTED, MODIFIED, DENIED, NOTICE_SERVED -> event.purposeVersion();
+        };
+
         return new ConsentArtefact(
                 event.entityId(),
                 event.subjectId(),
                 event.purposeCode(),
-                event.purposeVersion(),
+                purposeVersion,
                 status,
                 event.legalBasis(),
                 event.noticeId(),

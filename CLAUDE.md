@@ -45,12 +45,12 @@ cd platform && mvn -B verify
 Online. **Not `-o`** — the offline habit was mistaken for a constraint for three planning passes; §3
 of the plan file records it. Testcontainers needs a running Docker daemon and nothing else.
 
-Baseline: **508 tests, 0 failures** — 33 core + 38 ledger + 113 policy + 5 service unit + 319 service
+Baseline: **528 tests, 0 failures** — 33 core + 38 ledger + 113 policy + 5 service unit + 339 service
 IT. *A drop in the count is a deleted test, not a passing build.* The count comes from the
 `TEST-*.xml` `tests` attributes, never the failsafe `.txt` summaries — `consent-ledger` reports
 `Tests run: 0` there.
 
-Next Flyway migration is **`V31`**, in `platform/consent-ledger/src/main/resources/db/migration/`.
+Next Flyway migration is **`V32`**, in `platform/consent-ledger/src/main/resources/db/migration/`.
 
 ---
 

@@ -16,6 +16,9 @@ import com.uds.consent.ledger.store.ProcessingActivityStore;
 import com.uds.consent.ledger.store.ProvenanceStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
 import com.uds.consent.ledger.store.RetentionStore;
+import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.PropagationCoverageStore;
+import com.uds.consent.ledger.store.PropagationGapStore;
 import com.uds.consent.ledger.store.RightsFulfilmentStore;
 import com.uds.consent.ledger.store.SdfObligationStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
@@ -99,6 +102,10 @@ public class AdminController {
     private final RightsFulfilmentStore fulfilmentStore;
     private final WebhookStore webhooks;
 
+    private final PropagationTargetStore propagationTargets;
+    private final PropagationCoverageStore propagationCoverage;
+    private final PropagationGapStore propagationGaps;
+
     public AdminController(CachingPurposeCatalog purposes, EntityStore entities,
                            BlastRadiusService blastRadius, LedgerIntegrityVerifier verifier,
                            IntegritySweeper integritySweeper, ProvenanceService provenance,
@@ -122,7 +129,13 @@ public class AdminController {
                            SubjectStore subjectStore,
                            SigningKeyStore signingKeys,
                            RightsFulfilmentStore fulfilmentStore,
-                           WebhookStore webhooks) {
+                           WebhookStore webhooks,
+                           PropagationTargetStore propagationTargets,
+                           PropagationCoverageStore propagationCoverage,
+                           PropagationGapStore propagationGaps) {
+        this.propagationTargets = propagationTargets;
+        this.propagationCoverage = propagationCoverage;
+        this.propagationGaps = propagationGaps;
         this.properties = properties;
         this.subjectStore = subjectStore;
         this.signingKeys = signingKeys;
@@ -410,6 +423,131 @@ public class AdminController {
                                           boolean mandatory,
                                           boolean active,
                                           String description) {
+    }
+
+    /**
+     * The systems that must be told about this entity's consent changes, and whether anything can
+     * currently reach them.
+     *
+     * <p>The structural sibling of {@code fulfilment-targets} and a deliberately different question.
+     * That register is about the <em>act</em> of erasure or export for a rights request; this one is
+     * about <em>notification</em> of a consent-state change — DPDP s.6(6)'s duty to "cease and cause
+     * its Data Processors to cease processing", and GDPR Art. 19's duty to communicate to each
+     * recipient. Two registers because they are two obligations; one register would be filled for
+     * neither.
+     *
+     * <p><strong>Each row carries the subscription that currently reaches it, or null.</strong> That
+     * is the half of this route that earns it. The join key is free text on both sides, so a target
+     * for {@code DENCRM} and a subscription labelled {@code DENCRM_PROD} silently do not meet — and
+     * unlike a fulfilment mismatch, which fails loud as a 409 naming the system, this one fails
+     * quiet and writes a gap row every day forever. A null here is either "nobody is registered",
+     * which is the finding, or "somebody typed a different name", which is a typo the operator can
+     * only see if it is shown to them.
+     */
+    @GetMapping("/propagation/targets")
+    public Map<String, Object> propagationTargets(@RequestParam String entityId) {
+        List<PropagationTargetStore.Coverage> coverage = propagationTargets.coverage(entityId);
+        return Map.of(
+                "entityId", entityId,
+                "targets", coverage,
+                // Named separately rather than left to the reader to filter. "How many obligations
+                // can this entity not currently meet" is the number an operator is here for.
+                "uncovered", coverage.stream().filter(PropagationTargetStore.Coverage::uncovered)
+                        .map(PropagationTargetStore.Coverage::systemCode).toList());
+    }
+
+    /**
+     * Registers or updates a system that must be told about a consent change.
+     *
+     * <p><strong>Adding a mandatory target does not block anything.</strong> Unlike a fulfilment
+     * target, which immediately blocks closure of every open request of that type, this one only
+     * makes a gap visible: the uncovered gauge rises, the alert fires after thirty minutes, and the
+     * relay starts recording a daily gap row until a subscription carries that {@code system_code}.
+     * Propagation is evidence, not a gate — refusing to publish a withdrawal because nobody
+     * registered to hear it would punish the principal for a configuration error.
+     *
+     * <p>The topic is validated against the set the platform actually publishes. A target on a topic
+     * nothing is enqueued to would sit at "covered" forever while nobody was ever told, which is a
+     * register that fails open and looks exactly like success.
+     */
+    @PutMapping("/propagation/targets")
+    public Map<String, Object> upsertPropagationTarget(
+            @Valid @RequestBody PropagationTargetRequest request, Authentication authentication) {
+        String actor = actorOf(authentication);
+        String topic = request.topic();
+        if (!registrableTopics().contains(topic)) {
+            throw new IllegalArgumentException("unknown topic: " + topic
+                    + "; the platform publishes to " + registrableTopics()
+                    + ". A target on a topic nothing is enqueued to can never be covered and would "
+                    + "read as satisfied forever.");
+        }
+
+        String systemCode = request.systemCode().toUpperCase(java.util.Locale.ROOT);
+        propagationTargets.upsert(request.entityId(), topic, systemCode, request.mandatory(),
+                request.active(), request.description());
+
+        auditStore.record(actor, "PROPAGATION_TARGET_CONFIGURED", request.entityId(),
+                "propagation_target", systemCode,
+                Map.of("topic", topic,
+                        "mandatory", String.valueOf(request.mandatory()),
+                        "active", String.valueOf(request.active())));
+        return Map.of("systemCode", systemCode, "recorded", true);
+    }
+
+    /**
+     * Obligations that went unmet, one row per system per day.
+     *
+     * <p>History, not current state — and the distinction is why there are two things to read.
+     * {@code /propagation/targets} answers "what is broken now" and returns to zero when somebody
+     * fixes it; this answers "what did we fail to show on which day" and never shrinks, because it
+     * is append-only evidence. Nothing alerts on this route: an alert on a monotonic count is one
+     * that fires forever and is muted inside a week.
+     *
+     * <p>Read {@code reason} before drawing a conclusion. {@code NO_DELIVERY_CHANNEL} means the
+     * configured publisher writes no delivery evidence — it is a fact about this deployment, not
+     * about the downstream system, which may be consuming everything perfectly over Kafka.
+     */
+    @GetMapping("/propagation/gaps")
+    public List<PropagationGapStore.Gap> propagationGaps(
+            @RequestParam String entityId,
+            @RequestParam(required = false) String topic,
+            @RequestParam(defaultValue = "200") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        return propagationGaps.forEntity(entityId, topic, Math.min(limit, 1000), Math.max(offset, 0));
+    }
+
+    /**
+     * The topics a propagation target may name.
+     *
+     * <p>**Two, not one.** The consent-events stream, and {@code uds.consent.retention} — which
+     * {@code RetentionSweeper} enqueues keyed {@code entityId:subjectId}, a shape {@code OutboxKey}
+     * parses, so it is genuinely routable and genuinely registrable. Validating against the events
+     * topic alone refused it at this route while {@code PropagationTopicCheck} would have warned
+     * that it "is not published by this platform" — a false statement about the stream that carries
+     * pre-erasure and retention actions concerning a named principal.
+     *
+     * <p>{@code rights.verification.requested} is deliberately absent: it is keyed on the request
+     * reference alone, carries no entity, and so can never route to a subscription.
+     * {@code REGULATORY_HANDOFF.md} §8.7 records it as structurally uncoverable.
+     */
+    private List<String> registrableTopics() {
+        return List.of(properties.getEvents().getTopic(), RetentionSweeper.TOPIC_RETENTION);
+    }
+
+    /**
+     * @param topic      the stream, validated against what the platform publishes
+     * @param systemCode DENCRM, ATHENA_DIALER, HRMS. Upper-cased on the way in, because the join
+     *                   against {@code webhook_subscription.system_code} is exact and a case
+     *                   mismatch produces a permanent phantom gap rather than an error
+     * @param mandatory  whether an unreachable target is a finding. Non-mandatory records the
+     *                   relationship without alerting on it
+     */
+    public record PropagationTargetRequest(@NotBlank String entityId,
+                                           @NotBlank String topic,
+                                           @NotBlank String systemCode,
+                                           boolean mandatory,
+                                           boolean active,
+                                           String description) {
     }
 
     /**

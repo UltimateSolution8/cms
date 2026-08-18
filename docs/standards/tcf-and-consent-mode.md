@@ -126,10 +126,14 @@ decision API**. That is a wiring gap, not a philosophical one.
 **From TCF**
 
 1. **Publisher restrictions, adapted to the entity hierarchy** — the most valuable structural idea in the
-   standard and the one thing in the field we have no equivalent of. Resolve it through the **existing**
-   recursive-CTE nearest-ancestor walk in `PurposeRegistryStore`: the invariant is explicit that anything
-   a subsidiary may override uses that one pattern and does not invent a second. A new entity-scoped
-   table, its RLS policy on `uds_entity_claim()` in the same migration.
+   standard and the one thing in the field we have no equivalent of. **There is no existing walk to
+   resolve it through** — this paragraph cited "the existing recursive-CTE nearest-ancestor walk in
+   `PurposeRegistryStore`" on the authority of an invariant that turned out to describe machinery the
+   platform does not have (rules §3, corrected in Phase 16's closure). The only walk is
+   `EntityStore.inheritanceChain`, an iterative loop over the parent link serving entity contacts alone.
+   So this is a build, not a reuse: a new entity-scoped table, its RLS policy on `uds_entity_claim()` in
+   the same migration, and an ancestor resolution written for it — modelled on `EntityStore`'s shape,
+   which is the only precedent there is.
 2. **`consentable: false` / `rightToObject: false` as registry data.** `CaptureValidator` already refuses
    to record consent for a DPDP s.7(i) legitimate use — but that judgement lives in code, so the purpose
    registry does not carry the fact and nothing reading the registry can see it. As a column on
@@ -158,7 +162,8 @@ decision API**. That is a wiring gap, not a philosophical one.
    denied-default before GTM loads, and that belongs in the integrator contract.
 3. **Many-to-one mapping as data**, never a `switch` — our purposes are finer-grained than seven
    parameters and always will be, so the fan-in must be a table an operator can inspect and an auditor can
-   read, in the purpose registry, with nearest-ancestor override so a subsidiary can differ.
+   read, in the purpose registry. If a subsidiary must be able to differ, the ancestor resolution has to
+   be **built** for that table — nothing in the purpose registry inherits today (rules §3).
 4. **An `onConsentChange` observer and a change *event*.** `cmp_consent_update` announces the change with
    a payload rather than leaving it in mutable state a consumer must poll — our outbox in miniature, and
    an argument for the browser-side contract being event-shaped too.

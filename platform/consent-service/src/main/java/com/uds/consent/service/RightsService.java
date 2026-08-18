@@ -74,12 +74,22 @@ public class RightsService {
      * {@link ClockTolerance#SKEW} — the same window the artefact projector uses, because two
      * independently chosen tolerances would be two definitions of "now" inside one evidence plane.
      *
-     * <p><strong>Backward manufactures a breach.</strong> An instant far in the past files a
-     * request that is already overdue on the day it arrives. That is not an attack on the
-     * principal; it is an attack on the group's own compliance record, and it is the one somebody
-     * inside would use. Bounded rather than refused outright, because a genuinely late data entry
-     * is ordinary — a letter that sat in a postbag, a request logged after a holiday — and the
-     * clock is supposed to run from the principal's act rather than from the group's typing.
+     * <p><strong>Backward is a sanity window, and nothing more than that.</strong> It was
+     * documented for three phases as preventing a request "already past its deadline", and that
+     * was never true: every period the platform computes is shorter than the bound — IN 30, GDPR
+     * 30, SG 30, CPRA 45, MY 21, KR 10, and a consent withdrawal 1 — so everything between the
+     * applicable period and the bound is accepted <em>and is</em> overdue on arrival. The
+     * platform's own suite is the counter-example: a Korean access request filed sixty days back
+     * against a ten-day period is accepted, and the SLA sweeper correctly reports it breached.
+     *
+     * <p>Accepting those is right. A letter found in a postbag is a real filing, and refusing it
+     * teaches an operator to file with today's date, which destroys the provenance this whole
+     * mechanism exists to preserve. What the bound actually buys is narrower and worth keeping: an
+     * instant that old is far more likely a typo or a broken clock than a filing, and beyond it
+     * the platform declines to guess. The fact the false reasoning was standing in for is recorded
+     * instead — see {@code bornOverdue} on the audit event, which distinguishes <em>the group was
+     * late</em> from <em>the request arrived late</em>. Those are different facts and a Rule 14(3)
+     * dispute turns on which one it was.
      *
      * <p>Neither refusal is a judgement about who filed the request. That is
      * {@link RightsVerificationMethod}'s job, and it refuses nothing.
@@ -94,10 +104,12 @@ public class RightsService {
         }
         if (receivedAt.isBefore(now.minus(maxBackdate))) {
             throw new IllegalArgumentException(
-                    "receivedAt " + receivedAt + " is more than " + maxBackdate + " ago, so this "
-                            + "request would be filed already past its deadline. If the principal "
-                            + "genuinely asked that long ago, that is a breach to be recorded and "
-                            + "escalated deliberately rather than created by an intake call.");
+                    "receivedAt " + receivedAt + " is more than " + maxBackdate + " ago. That is a "
+                            + "sanity bound, not a statement about the deadline: a value that old "
+                            + "is more likely a typo or a wrong clock than a filing, and the "
+                            + "platform declines to guess which. A genuinely late filing inside "
+                            + "the bound is accepted, and is recorded as having arrived overdue if "
+                            + "it did.");
         }
     }
 
@@ -144,7 +156,14 @@ public class RightsService {
                         // On the audit row as well as the request row. The question an audit asks
                         // is "when did the clock start and why then", and the answer should be in
                         // the append-only trail rather than only on a table an operator can see.
-                        "verification", verification.name()));
+                        "verification", verification.name(),
+                        // The distinction the backdate bound was wrongly documented as enforcing.
+                        // A request whose deadline has already passed at the moment it is filed is
+                        // not the group missing a deadline — it is a late filing, and the two are
+                        // answered very differently under Rule 14(3). Recorded here rather than as
+                        // a column because it is derivable from receivedAt and dueAt, and a
+                        // derived value stored twice is a value that can disagree with itself.
+                        "bornOverdue", Boolean.toString(deadline.dueAt().isBefore(now))));
 
         log.info("rights request {} ({}) for entity {} due {} — {}", requestId, intake.type(),
                 intake.entityId(), deadline.dueAt(), deadline.basis());

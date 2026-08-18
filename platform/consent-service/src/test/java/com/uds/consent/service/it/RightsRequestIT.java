@@ -129,6 +129,67 @@ class RightsRequestIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("a late filing is accepted, and the audit row says it arrived overdue")
+    void aLateFilingIsAcceptedAndRecordedAsBornOverdue() {
+        // The case the backdate bound was documented as preventing and never did. Korea's period
+        // is ten days; sixty days back is comfortably inside the ninety-day bound, so the platform
+        // accepts it — correctly, because a letter found in a postbag is a real filing and
+        // refusing it teaches an operator to file with today's date, destroying the provenance the
+        // whole mechanism exists to preserve.
+        //
+        // What was missing is the distinction a Rule 14(3) dispute actually turns on: *the group
+        // was late* and *the request arrived late* are different facts, and until now the record
+        // could not tell them apart.
+        Instant sixtyDaysAgo = Instant.now().minus(60, ChronoUnit.DAYS);
+
+        RightsRequestStore.Request late = file(RightsRequestType.ACCESS, Jurisdiction.KR,
+                sixtyDaysAgo);
+
+        assertThat(late.dueAt())
+                .withFailMessage("a ten-day Korean period sixty days back should already be past")
+                .isBefore(Instant.now());
+
+        assertThat(audit.recent(ENTITY, 200))
+                .filteredOn(entry -> "RIGHTS_REQUEST_RECEIVED".equals(entry.action())
+                        && late.requestId().equals(entry.targetId()))
+                .singleElement()
+                .satisfies(entry -> assertThat(detail(entry).get("bornOverdue"))
+                        .withFailMessage("the record cannot distinguish a late filing from a "
+                                + "missed deadline, which is the distinction a Rule 14(3) dispute "
+                                + "turns on")
+                        .isEqualTo("true"));
+
+        // And the ordinary case says so too, rather than leaving the field absent and ambiguous.
+        RightsRequestStore.Request timely =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+        assertThat(audit.recent(ENTITY, 200))
+                .filteredOn(entry -> timely.requestId().equals(entry.targetId()))
+                .singleElement()
+                .satisfies(entry -> assertThat(detail(entry).get("bornOverdue"))
+                        .isEqualTo("false"));
+    }
+
+    @Test
+    @DisplayName("both start-instant refusals reach the caller as 400, not as a 500")
+    void theRefusalsAreAnsweredOverHttp() {
+        // Both bounds were asserted only against RightsService.intake directly. The 400 they are
+        // documented as producing — in the controller javadoc, in TRACEABILITY and in the plan —
+        // was inferred from ApiExceptionHandler and never once exercised, so nothing would have
+        // caught the handler being reordered, an exception type changing, or the mapping being
+        // lost. An integrator meeting a 500 here would be told the platform is broken rather than
+        // that their value is out of bounds.
+        assertThat(fileOverHttp(Instant.now().plus(1, ChronoUnit.DAYS)).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        assertThat(fileOverHttp(Instant.now().minus(200, ChronoUnit.DAYS)).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        // And the body names the bound, so the caller can act on it without reading the source.
+        assertThat(fileOverHttp(Instant.now().minus(200, ChronoUnit.DAYS)).getBody())
+                .contains("sanity bound");
+    }
+
+    @Test
     @DisplayName("closing a request needs a resolution, including when it is refused")
     void closingRequiresAResolution() {
         RightsRequestStore.Request request =
@@ -252,13 +313,12 @@ class RightsRequestIT extends PostgresIntegrationTest {
     }
 
     @Test
-    @DisplayName("a receivedAt beyond the backdate bound is refused, because it would file a breach")
+    @DisplayName("a receivedAt beyond the backdate bound is refused, as a sanity check on the value")
     void aFarBackdatedStartInstantIsRefused() {
-        // The mirror of the test above, and the direction somebody inside would use. An instant
-        // far enough in the past files a request that is already past its deadline on the day it
-        // arrives — a statutory breach written into the group's own record without one having
-        // happened. The property asserted is that no request exists afterwards, not merely that
-        // something was thrown.
+        // A sanity bound, not a deadline argument. A value this old is far more likely a typo or
+        // a wrong clock than a filing, and beyond it the platform declines to guess which. The
+        // property asserted is that no request exists afterwards, not merely that something was
+        // thrown.
         long before = store.summarise(ENTITY, Instant.now()).stream()
                 .mapToLong(RightsRequestStore.TypeSummary::total).sum();
 
@@ -271,7 +331,11 @@ class RightsRequestIT extends PostgresIntegrationTest {
         assertThatThrownBy(() -> file(RightsRequestType.ACCESS, Jurisdiction.IN,
                 Instant.now().minus(200, ChronoUnit.DAYS)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("already past its deadline");
+                // The refusal used to say the request "would be filed already past its deadline",
+                // and that reasoning was false: every period the platform computes is shorter than
+                // this bound, so filings between the two are accepted and *are* overdue. See
+                // aLateFilingIsAcceptedAndRecordedAsBornOverdue, which is that case.
+                .hasMessageContaining("sanity bound");
 
         assertThat(store.summarise(ENTITY, Instant.now()).stream()
                 .mapToLong(RightsRequestStore.TypeSummary::total).sum())
@@ -463,5 +527,38 @@ class RightsRequestIT extends PostgresIntegrationTest {
         return rights.intake(new RightsService.Intake(ENTITY, "it-rights-" + UUID.randomUUID(),
                 null, null, type, jurisdiction, receivedAt, "filed by integration test",
                 "compliance-console", RightsVerificationMethod.UNVERIFIED, null));
+    }
+
+    /**
+     * Files a request over HTTP so the refusal's status code is exercised rather than assumed.
+     *
+     * <p>Deliberately not routed through {@code rights.intake}: the thing under test is the
+     * translation of the refusal into an RFC 7807 400 at the edge, which a direct service call
+     * cannot see.
+     */
+    private ResponseEntity<String> fileOverHttp(Instant receivedAt) {
+        Map<String, Object> body = Map.of(
+                "entityId", ENTITY,
+                "identifierType", "EMAIL",
+                "identifierValue", "http-bound-" + UUID.randomUUID() + "@example.test",
+                "type", "ACCESS",
+                "jurisdiction", "IN",
+                "receivedAt", receivedAt.toString(),
+                "details", "filed to exercise the bound over the wire");
+
+        return rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange("/v1/rights", HttpMethod.POST, new HttpEntity<>(body), String.class);
+    }
+
+    /**
+     * The audit row's detail as data.
+     *
+     * <p>Parsed rather than string-matched: the column is {@code jsonb} and PostgreSQL normalises
+     * it on read, so asserting against the serialised form tests the database's formatting instead
+     * of the fact the platform recorded.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> detail(AdminAuditStore.Entry entry) {
+        return com.uds.consent.core.crypto.CanonicalJson.parse(entry.detailJson(), Map.class);
     }
 }

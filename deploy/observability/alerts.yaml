@@ -100,6 +100,64 @@ spec:
               consent state. Check the relay and the registered webhook subscriptions —
               webhook_delivery records every attempt.
 
+        - alert: PropagationTargetUnreachable
+          # A system the group has declared must be told about a consent change, that no active
+          # subscription can reach. Critical rather than warning: DPDP s.6(6) requires the fiduciary
+          # to "cease and cause its Data Processors to cease processing", and a processor nobody can
+          # notify is a duty that cannot be discharged for as long as this is non-zero.
+          #
+          # This reads the REGISTER, not the history. It returns to zero the moment somebody
+          # registers the subscription, which is what makes it alertable — a rule over
+          # propagation_gap could never clear, would fire forever and would be muted within a week.
+          # Nothing alerts on propagation_gap, deliberately.
+          expr: uds_consent_propagation_uncovered > 0
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} system(s) must be told about consent changes and cannot be reached"
+            description: >-
+              A mandatory propagation_target has no active webhook_subscription carrying its
+              system_code. Withdrawals are being recorded and are reaching nobody at that system.
+              Check GET /v1/admin/propagation/targets — each row names the subscription resolved
+              against it, and a null there is either an unregistered system or a system_code typo.
+            runbook: "docs/OPERATIONS.md#4-sweepers-and-the-outbox"
+
+        - alert: PropagationEvidenceWriteFailing
+          # The reconciler swallows its own failures so that an evidence write can never cause a
+          # second POST to a downstream system. This is where the swallowed failures surface.
+          expr: uds_consent_propagation_failed_writes > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Propagation gaps are not being recorded"
+            description: >-
+              Consent changes are being published and what could not be shown to have arrived is
+              not being written down. The propagation register is going stale silently.
+
+        - alert: UnverifiedRightsRequestsOpen
+          # DPDP Rule 14(3). UNVERIFIED refuses nothing, deliberately — parking requests outside the
+          # clock until somebody fills in a field produces the outcome the Rule actually penalises.
+          # But the SHARE of open requests whose clock started on an instant nobody checked is a
+          # number UDS undertook to watch, and until now the platform could answer it and nothing
+          # asked.
+          #
+          # The threshold is UDS's to set: what counts as too many depends on how the intake desk
+          # actually works, and a number invented here would be the platform legislating for them.
+          expr: uds_consent_rights_unverified_open > 20
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $value }} open rights request(s) started on an unverified instant"
+            description: >-
+              verification_method is UNVERIFIED and the request is still open. Not a defect in
+              itself — the label is not a gate — but REGULATORY_HANDOFF §8.6 records that UDS
+              watches this share rather than merely being able to query it. Adjust the threshold
+              to the agreed figure.
+            runbook: "docs/REGULATORY_HANDOFF.md"
+
         - alert: PartitionRunwayShort
           # PartitionMaintenanceSweeper provisions three months ahead. Firing at one month means
           # two consecutive months of the job not running, which is a silent degradation until the

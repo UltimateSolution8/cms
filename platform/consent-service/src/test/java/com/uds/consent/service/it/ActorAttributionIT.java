@@ -99,6 +99,69 @@ class ActorAttributionIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("an OPERATOR_ASSERTED filing must name the operator, and is refused when it does not")
+    void anAssertedVerificationNamesAPerson() {
+        // Rules §5: a credential is not a person. OPERATOR_ASSERTED says somebody established
+        // identity, and POST /v1/rights recorded authentication.getName() for it — one password
+        // held by a compliance team, so the assurance was attributable to fifteen people at once
+        // while three artefacts, including V30's own column comment, claimed it named somebody.
+        //
+        // Fixed in the code rather than in the prose, because the prose is right about what the
+        // field should mean and correcting a schema comment would have spent a migration on it.
+        HttpHeaders noActor = new HttpHeaders();
+        noActor.add(SUPPRESS, "true");
+
+        ResponseEntity<String> refused = admin().exchange("/v1/rights", HttpMethod.POST,
+                new HttpEntity<>(rightsFiling("Called the mobile on file and confirmed the PAN"),
+                        noActor), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("X-UDS-Actor");
+    }
+
+    @Test
+    @DisplayName("a machine filing no assertion is still accepted without an actor")
+    void anUnassertedFilingIsUnaffected() {
+        // The other half, and the one that would be easy to break. A dialer or a web form filing a
+        // rights request is a system, not a person, and it asserts nothing about identity — so the
+        // header stays deliberately unrequired there, exactly as rules §5 says for machine routes.
+        // Requiring it would let any capture surface write a human name into evidence about a
+        // check no human made, which is the failure the split exists to avoid.
+        HttpHeaders noActor = new HttpHeaders();
+        noActor.add(SUPPRESS, "true");
+
+        Map<String, Object> body = rightsFiling(null);
+
+        assertThat(admin().exchange("/v1/rights", HttpMethod.POST,
+                new HttpEntity<>(body, noActor), String.class).getStatusCode())
+                .withFailMessage("requiring the header on an unasserted filing would break every "
+                        + "machine caller and claim a person behind a system's act")
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    @DisplayName("the operator who asserted a verification is the name in the audit trail")
+    void theAssertingOperatorIsRecorded() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("X-UDS-Actor", "arjun.mehta@uds.example");
+
+        ResponseEntity<Map> filed = admin().exchange("/v1/rights", HttpMethod.POST,
+                new HttpEntity<>(rightsFiling("Employee ID checked at the service desk"), headers),
+                Map.class);
+
+        assertThat(filed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String requestId = (String) filed.getBody().get("requestId");
+
+        AdminAuditStore.Entry entry = latestFor(requestId);
+        assertThat(entry.actorId())
+                .withFailMessage("the assurance was attributed to the credential, so the audit "
+                        + "trail cannot say which person made the claim it records")
+                .isEqualTo("arjun.mehta@uds.example");
+        assertThat(entry.clientId()).isEqualTo("compliance-console");
+        assertThat(entry.detailJson()).contains("OPERATOR_ASSERTED");
+    }
+
+    @Test
     @DisplayName("an over-long actor is truncated rather than written whole into evidence")
     void theAssertedActorIsBounded() {
         // The value lands in an append-only table, so an unbounded header is a way to put a
@@ -151,6 +214,25 @@ class ActorAttributionIT extends PostgresIntegrationTest {
                 "platform", "WEB",
                 "environment", "TEST",
                 "active", true);
+    }
+
+    /**
+     * A rights filing, optionally carrying an operator's verification claim.
+     *
+     * @param verifiedAs the claim, or null for a filing that asserts nothing about identity
+     */
+    private static Map<String, Object> rightsFiling(String verifiedAs) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("entityId", "DENAVE_IN");
+        body.put("identifierType", "EMAIL");
+        body.put("identifierValue", "attribution-" + UUID.randomUUID() + "@example.test");
+        body.put("type", "ACCESS");
+        body.put("jurisdiction", "IN");
+        body.put("details", "filed by the attribution suite");
+        if (verifiedAs != null) {
+            body.put("verifiedAs", verifiedAs);
+        }
+        return body;
     }
 
     private TestRestTemplate admin() {

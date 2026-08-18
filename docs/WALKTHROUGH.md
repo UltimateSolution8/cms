@@ -348,7 +348,8 @@ curl -s -u compliance-console:dev \
 | `receipts` | 1 — the stored payload and its hash |
 | `enforcementDenials` | **2** — both denials from §5 and §7, with reason, channel, application and the instant of the decision |
 | `rightsRequests`, `suppressions`, `consentManagerLinks`, `ageAssertions`, `reconfirmations`, `retentionActions` | 0 each — present and empty, so a reader can tell "none" from "not looked at" |
-| `truncation` | **Empty**, meaning this bundle is complete. For a principal past 100 receipts or 200 denials it carries one entry per capped section, naming the cap and a ready-to-run request that returns the remainder |
+| `truncation` | **Empty**, meaning this bundle is complete. For a principal past 100 receipts or 200 denials it carries one entry per capped section **per subject id**, naming the cap and a ready-to-run request that returns that remainder — a merged principal produces one per overflowing id, because the cap is applied per id and a single pointer over a concatenated list could not be run |
+| `propagation` | **Empty here**, because no `propagation_target` is registered for this entity — the register is UDS's to populate (`REGULATORY_HANDOFF.md` §8.7). Once it is, one row per registered system: whether anything can currently reach it, what was delivered *to this principal*, and a register-level count of days the system was recorded as untold. Read the record's javadoc before reading a zero as "not propagated" |
 | `integrity` | The chain verification, inline |
 
 The `enforcementDenials` section is the one that surprises people. It means the platform can show a
@@ -590,3 +591,62 @@ subject that already exists, which changes what §9 returns and makes §10 less 
 
 Anyone re-running this should **update this document with what they find, including nothing**. A
 walkthrough that is not re-run is a screenshot; one that is re-run each release is a control.
+
+
+---
+
+## 10. Propagation — who was told, and who was not
+
+Phase 17. Everything above ends at the ledger; this is the half that says whether a withdrawal
+reached anybody. Run it after §8, against the same Compose stack.
+
+**Register a system that must be told, with nothing subscribed to reach it.**
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD -X PUT \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: walkthrough@uds' \
+  -d '{"entityId":"DENAVE_IN","topic":"uds.consent.events","systemCode":"DENCRM",
+       "mandatory":true,"active":true,"description":"walkthrough"}' \
+  http://localhost:8080/v1/admin/propagation/targets
+```
+
+**Read the register back.** `subscriptionId` is `null` and `uncovered` names `DENCRM` — the platform
+now says, in one call, that a system it was told must hear about withdrawals cannot be reached:
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD \
+  'http://localhost:8080/v1/admin/propagation/targets?entityId=DENAVE_IN'
+```
+
+The same number is on the management port, as a detail and never a DOWN condition:
+
+```bash
+curl -sS http://localhost:9090/actuator/health | jq '.components.platform.details.propagationUncovered'
+```
+
+**Withdraw, then read the gap.** After the relay's next pass (two seconds):
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD \
+  'http://localhost:8080/v1/admin/propagation/gaps?entityId=DENAVE_IN'
+```
+
+**Read `reason` before concluding anything.** On a stack running the default `log` publisher it is
+`NO_DELIVERY_CHANNEL` — the platform recording that it *cannot observe* delivery, not that DenCRM
+was not told. `NO_SUBSCRIPTION` is the one that means nobody was reachable. See `OPERATIONS.md`
+§4.0a.
+
+**Then register the subscription and watch it clear.** `uncovered` returns to zero, which is the
+whole point of deriving current state from the register rather than from history:
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD -X PUT \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: walkthrough@uds' \
+  -d '{"subscriptionId":"DENCRM","entityId":"DENAVE_IN","topic":"uds.consent.events",
+       "url":"http://host.docker.internal:9099/hook","secret":"shared","active":true}' \
+  http://localhost:8080/v1/admin/subscriptions
+```
+
+**The gap row does not disappear, and that is correct.** It is append-only evidence that on that day
+the obligation was unmet. One row per system per day: it names the first principal and event type
+observed that day as an exemplar, not the whole set.

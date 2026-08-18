@@ -76,6 +76,12 @@ public class WebhookEventPublisher implements EventPublisher {
         this.http = builder.requestFactory(factory).build();
     }
 
+    /** This is the one publisher that writes a delivery row per attempt. */
+    @Override
+    public boolean writesDeliveryEvidence() {
+        return true;
+    }
+
     @Override
     public void publish(String topic, String key, String payload) {
         publish(topic, key, payload, 0L, 0);
@@ -83,21 +89,29 @@ public class WebhookEventPublisher implements EventPublisher {
 
     @Override
     public void publish(String topic, String key, String payload, long outboxId, int attempt) {
-        String entityId = entityFrom(key);
+        String entityId = OutboxKey.entityFrom(key);
+        String subjectId = OutboxKey.subjectFrom(key);
         List<WebhookStore.Subscription> targets = subscriptions.activeFor(topic, entityId);
 
         if (targets.isEmpty()) {
-            // Not an error and not silent. An entity with no subscriber is an entity whose
-            // downstream systems are still pull-only — which is a fact worth being able to find in
-            // a log when somebody asks why DenCRM did not hear about a withdrawal.
-            log.debug("no active webhook subscription for topic={} entity={}", topic, entityId);
+            // Deliberately silent here, and that is a change of position rather than an oversight.
+            //
+            // This branch used to log at debug under a comment claiming it was "not an error and
+            // not silent". com.uds.consent is INFO in every profile but local, so the line did not
+            // exist in production and the comment was false — the exact defect class this
+            // programme keeps correcting, sitting on the branch that decides whether a withdrawal
+            // reaches anybody.
+            //
+            // PropagationReconciler now records the fact as a row against the register, which is
+            // evidence rather than a log line, and it does so once a day per target rather than
+            // once per event. A WARN here would be that flood; the row is the record.
             return;
         }
 
         RuntimeException firstFailure = null;
         for (WebhookStore.Subscription target : targets) {
             try {
-                deliver(target, payload, outboxId, attempt);
+                deliver(target, subjectId, payload, outboxId, attempt);
             } catch (RuntimeException e) {
                 if (firstFailure == null) {
                     firstFailure = e;
@@ -115,8 +129,8 @@ public class WebhookEventPublisher implements EventPublisher {
         }
     }
 
-    private void deliver(WebhookStore.Subscription target, String payload, long outboxId,
-                         int attempt) {
+    private void deliver(WebhookStore.Subscription target, String subjectId, String payload,
+                         long outboxId, int attempt) {
         Instant now = Instant.now();
         try {
             var response = http.post()
@@ -131,18 +145,18 @@ public class WebhookEventPublisher implements EventPublisher {
                     .retrieve()
                     .toBodilessEntity();
 
-            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), outboxId,
-                    attempt, "DELIVERED", response.getStatusCode().value(), null, now);
+            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), subjectId,
+                    outboxId, attempt, "DELIVERED", response.getStatusCode().value(), null, now);
 
         } catch (RestClientResponseException e) {
-            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), outboxId,
-                    attempt, "FAILED", e.getStatusCode().value(), e.getMessage(), now);
+            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), subjectId,
+                    outboxId, attempt, "FAILED", e.getStatusCode().value(), e.getMessage(), now);
             throw e;
         } catch (RuntimeException e) {
             // Connection refused, DNS failure, timeout — no status code to record, which is itself
             // the useful distinction from a 500: one endpoint is broken, the other is absent.
-            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), outboxId,
-                    attempt, "FAILED", null, e.getMessage(), now);
+            subscriptions.recordDelivery(target.subscriptionId(), target.entityId(), subjectId,
+                    outboxId, attempt, "FAILED", null, e.getMessage(), now);
             throw e;
         }
     }
@@ -163,26 +177,6 @@ public class WebhookEventPublisher implements EventPublisher {
         } catch (Exception e) {
             throw new IllegalStateException("could not sign the webhook payload", e);
         }
-    }
-
-    /**
-     * The entity a message belongs to, from the outbox key.
-     *
-     * <p>{@code ConsentLedger} keys events {@code entityId|subjectId} and {@code RetentionSweeper}
-     * uses {@code entityId:subjectId}, so both separators are handled. Getting this wrong would
-     * deliver one group company's consent changes to another's endpoint — a cross-entity disclosure
-     * created by the mechanism meant to honour a withdrawal — so an unrecognised key shape yields
-     * no entity and therefore no subscribers, rather than a guess.
-     */
-    private static String entityFrom(String key) {
-        if (key == null) {
-            return "";
-        }
-        int separator = key.indexOf('|');
-        if (separator < 0) {
-            separator = key.indexOf(':');
-        }
-        return separator < 0 ? "" : key.substring(0, separator);
     }
 
     private static String correlationId() {

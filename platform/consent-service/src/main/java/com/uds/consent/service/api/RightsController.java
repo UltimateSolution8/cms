@@ -59,6 +59,8 @@ public class RightsController {
     @PreAuthorize("hasAnyRole('CAPTURE', 'ADMIN')")
     public RightsRequestStore.Request file(@Valid @RequestBody FileRequest request,
                                            Authentication authentication) {
+        boolean asserted = request.verifiedAs() != null && !request.verifiedAs().isBlank();
+
         return rights.intake(new RightsService.Intake(
                 request.entityId(),
                 request.subjectId(),
@@ -68,14 +70,24 @@ public class RightsController {
                 request.jurisdiction() == null ? Jurisdiction.IN : request.jurisdiction(),
                 request.receivedAt(),
                 request.details(),
-                actorOf(authentication),
+                // OPERATOR_ASSERTED means a *person* states they established identity, and until
+                // Phase 16's closure it recorded authentication.getName() — the credential. One
+                // password held by a compliance team, attributing the assurance to fifteen people
+                // at once, while three artefacts including V30's own column comment claimed it
+                // named somebody. Rules §5: a credential is not a person.
+                //
+                // So the assertion path demands the header and the machine path does not. That
+                // split is deliberate and is the same one actorOf documents: a system filing a
+                // request is not claiming to have checked anything, and requiring a human name
+                // there would let any caller write one into evidence about an act no person
+                // performed.
+                asserted ? Actor.required(authentication).actorId() : actorOf(authentication),
                 // The weaker reading is the default. An operator who did establish identity says
                 // how and gets OPERATOR_ASSERTED; an empty field is recorded as UNVERIFIED rather
                 // than left to look like every other request. Nothing is refused either way — see
                 // RightsVerificationMethod, which is a label and not a gate.
-                request.verifiedAs() == null || request.verifiedAs().isBlank()
-                        ? RightsVerificationMethod.UNVERIFIED
-                        : RightsVerificationMethod.OPERATOR_ASSERTED,
+                asserted ? RightsVerificationMethod.OPERATOR_ASSERTED
+                        : RightsVerificationMethod.UNVERIFIED,
                 request.verifiedAs()));
     }
 
@@ -231,7 +243,9 @@ public class RightsController {
      *                   buy the group three extra days. Bounded in both directions — a value in
      *                   the future is refused with 400, because it would move the deadline
      *                   outward, and one older than {@code uds.consent.rights.max-backdate} is
-     *                   refused because it would file a request already in breach
+     *                   refused as a sanity bound — a value that old is more likely a typo
+     *                   than a filing. A late filing inside the bound is accepted, and is
+     *                   recorded as having arrived overdue if it already had
      * @param verifiedAs how the operator established that the person filing is the principal: a
      *                   call-back to a number already on file, an employee ID checked at a desk, a
      *                   document reference. Optional, and its absence is recorded as

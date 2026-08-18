@@ -13,8 +13,12 @@
 --
 --   * A forward-dated instant moves the deadline outward. In a dispute about lateness, the
 --     group's own record would be evidence supplied by the party the dispute is with.
---   * A far-backdated instant files a request already overdue, manufacturing a statutory
---     breach on the group's record. The mirror of the first, and the one an insider would use.
+--   * A far-backdated instant is refused as a sanity bound only. It was written here as
+--     "manufacturing a statutory breach", and that reasoning was wrong: every period the
+--     platform computes is shorter than the bound, so a filing between the applicable period
+--     and the bound is accepted and *is* overdue on arrival. Accepting those is correct — a
+--     letter found in a postbag is a real filing — and the distinction is recorded on the
+--     audit event as bornOverdue instead. Corrected in Phase 16's closure, C1.
 --
 -- Both are now refused in RightsService.intake — forward beyond the shared clock-skew window,
 -- backward beyond uds.consent.rights.max-backdate. This migration records the provenance that

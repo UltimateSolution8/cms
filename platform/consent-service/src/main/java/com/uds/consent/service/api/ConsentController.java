@@ -142,10 +142,15 @@ public class ConsentController {
      * Records a withdrawal.
      *
      * <p>Takes effect the moment it is committed: the projection updates in the same transaction,
-     * and the outbox row that tells every downstream system is written with it. DPDP s.6(6)
+     * and the outbox row that tells every downstream system is written with it. DPDP s.6(4)
      * requires withdrawal to be as easy as giving, which is a statement about the interface as
      * much as the API — a preference centre that buries this behind three screens fails the test
      * however fast this endpoint is.
+     *
+     * <p>The outbox row is also where <strong>s.6(6)</strong> — the separate duty to "cease and
+     * cause its Data Processors to cease processing" — is discharged, or is not. That limb is
+     * about the systems downstream of this one, and until a propagation register names them the
+     * platform can show it published and cannot show anyone was told.
      */
     @PostMapping("/withdraw")
     @PreAuthorize("hasAnyRole('CAPTURE', 'ADMIN')")

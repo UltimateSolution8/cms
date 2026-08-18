@@ -2,6 +2,7 @@ package com.uds.consent.service.config;
 
 import com.uds.consent.ledger.store.ConsentManagerStore;
 import com.uds.consent.ledger.store.OutboxStore;
+import com.uds.consent.ledger.store.PropagationCoverageStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
 import com.uds.consent.service.EnforcementRecorder;
@@ -46,11 +47,14 @@ public class PlatformHealthIndicator implements HealthIndicator {
     private final ReconfirmationStore reconfirmations;
     private final SdfObligationService sdf;
     private final SigningKeyStore signingKeys;
+    private final PropagationCoverageStore propagation;
 
     public PlatformHealthIndicator(IntegritySweeper integrity, OutboxStore outbox,
                                    EnforcementRecorder recorder, ConsentManagerStore managers,
                                    ReconfirmationStore reconfirmations,
-                                   SdfObligationService sdf, SigningKeyStore signingKeys) {
+                                   SdfObligationService sdf, SigningKeyStore signingKeys,
+                                   PropagationCoverageStore propagation) {
+        this.propagation = propagation;
         this.integrity = integrity;
         this.outbox = outbox;
         this.recorder = recorder;
@@ -82,6 +86,13 @@ public class PlatformHealthIndicator implements HealthIndicator {
                 // rotation procedure since before there was a mechanism to rotate with; this is
                 // what makes "when did we last rotate" answerable without a person remembering.
                 .withDetail("signingKeyAgeDays", signingKeyAgeDays())
+                // Systems that must be told about a consent change and that nothing can currently
+                // reach. A DETAIL, never a DOWN condition — and the distinction matters more here
+                // than it looks. Draining a healthy instance out of the load balancer because a
+                // downstream system is unregistered turns an evidence problem into an availability
+                // one, and the decision path would stop for every entity to protest about
+                // somebody else's configuration. The only DOWN is a broken chain.
+                .withDetail("propagationUncovered", propagation.uncoveredCount())
                 .withDetail("outboxPending", pending)
                 .withDetail("outboxBacklog", pending > OUTBOX_BACKLOG_THRESHOLD)
                 // Anything above zero means the platform is currently taking decisions it cannot

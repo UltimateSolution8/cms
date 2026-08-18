@@ -1,3 +1,48 @@
+> ## §0 — Audit of this document, 18 August 2026
+>
+> **This report is a third-party review that was checked finding by finding against the code. Four
+> findings are real, one is latent, ten describe machinery that already exists, and three are wrong
+> on the merits. Read this section before the claims below.** The full verdict table, with the file
+> and line proving each, is in `~/.claude/plans/we-want-to-build-staged-widget.md`, section
+> *"Audit — docs/CRITICAL_FINDINGS_REPORT.md"*.
+>
+> **Real, and acted on or scheduled:**
+> - **M4** (filed MEDIUM, 3 SP) is the best finding here and was the most serious defect open in the
+>   platform: a withdrawal rewrote the purpose version on the receipt handed to a data principal.
+>   Fixed in Phase 16's closure, C8.
+> - **C3**, narrowed — capture already refuses unevidenced parental consent; the live hole is a
+>   subject whose minority is established *after* capture. On `ROADMAP.md`.
+> - **C4**, reframed — the proposed control **cannot detect the attack it describes**, because
+>   `last_event_hash` is copied onto the artefact rather than derived from its `status`, so an edited
+>   projection leaves it consistent. The real gap is that nothing reconciles the projection against
+>   the chain. On `ROADMAP.md`.
+> - **C6**, second half only — no alert watches sweeper staleness. On `ROADMAP.md`.
+>
+> **Wrong on their stated premise, each disproved by reading one file:** C6's *"disabled in
+> production"* (`expiryEnabled = true` in Java **and** `application.yml:188`); C2 (`POST
+> /v1/suppression/scrub`, the append-only `scrub_run` table from V8, `recordScrubRun`, `GET
+> /v1/admin/enforcement/scrub-runs`, `SuppressionSource.NCPR_INDIA`); C5 (routes exist, dark behind a
+> flag with the re-activating event recorded — §4); C7 (`GET /v1/notices/reports/coverage`, which
+> refuses placeholder rows); H1 (describes a snapshot-sync ingestion flow the architecture does not
+> have); H11 (`BreachService`, `breach_notification` V9, `BreachClock`, `OPERATIONS.md` §9); H6
+> (`V3:368` already models Malaysian biometric consent); M1, M2, M3, M5, M7, M8 (all delivered — M5's
+> recommended fix is verbatim `ClockTolerance.SKEW`, and M8 was measured in Phase 12).
+>
+> **Defects in this document itself:** H8 cites **s.6(6)** for ease of withdrawal — it is **s.6(4)**.
+> The stated test total, 359, is wrong; the baseline is **515**. *"7 critical × ₹250cr = ₹1,750
+> crore"* is not how the DPDP Schedule works — those are per-breach maxima assessed by the Board, not
+> additive per finding. The *"Monte Carlo simulation (10,000 iterations)"* has no model, no inputs
+> and no velocity evidence behind its 72% and 12%. The word *"likely"* appears in four findings (H5,
+> H11, M1, M7), each stating as fact something the report says it did not read — and all four are
+> wrong. And the open-source comparison lists five things "UDS lacks" — RoPA, breach notification,
+> s.9 parental verification, court-ready evidence export, Consent Manager relay — **all five of which
+> exist here**, before recommending that modules be adopted from that project.
+>
+> Kept rather than deleted because an untracked document asserting the platform is not
+> production-ready is the kind that gets forwarded, and the corrections should travel with it.
+
+---
+
 # Critical Findings Report: UDS Consent Management System
 ## Production Readiness Analysis - Main System Core Issues
 

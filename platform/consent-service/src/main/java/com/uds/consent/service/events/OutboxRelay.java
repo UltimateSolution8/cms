@@ -32,12 +32,14 @@ public class OutboxRelay {
     private final OutboxStore outbox;
     private final EventPublisher publisher;
     private final PlatformProperties properties;
+    private final PropagationReconciler reconciler;
 
     public OutboxRelay(OutboxStore outbox, EventPublisher publisher,
-                       PlatformProperties properties) {
+                       PlatformProperties properties, PropagationReconciler reconciler) {
         this.outbox = outbox;
         this.publisher = publisher;
         this.properties = properties;
+        this.reconciler = reconciler;
     }
 
     @Scheduled(fixedDelayString = "${uds.consent.events.relay-interval:PT2S}")
@@ -55,6 +57,13 @@ public class OutboxRelay {
                         message.id(), message.attempts());
                 outbox.markPublished(message.id());
                 published++;
+
+                // AFTER markPublished, never between it and publish(). Between the two, a throwing
+                // evidence write would land in the catch below, mark the message failed, and cause
+                // a second POST to a downstream system because recording a gap failed. The
+                // reconciler swallows its own failures for the same reason and counts them instead.
+                reconciler.reconcile(message.topic(), message.eventKey(), message.payload(),
+                        message.id());
             } catch (RuntimeException e) {
                 outbox.markFailed(message.id(), e.getMessage());
                 if (message.attempts() + 1 >= ALERT_AFTER_ATTEMPTS) {

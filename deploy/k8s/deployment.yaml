@@ -20,6 +20,13 @@ spec:
   # Three, not two. The decision API is on the critical path of every outbound campaign, and
   # two replicas means a rolling deploy runs on one. The sweepers coordinate through SweepLock
   # so extra replicas do not multiply scheduled work.
+  #
+  # The OUTBOX RELAY is not a sweeper and takes no such lock, so all three replicas drain the same
+  # batch: subscribers receive each event up to three times and webhook_delivery records up to three
+  # rows per attempt. Consumers must be idempotent, which the publisher's javadoc already requires.
+  # `for update skip locked` on fetchUnpublished is the fix and is scheduled separately — see
+  # ROADMAP.md. Do not "fix" this by putting the relay under SweepLock: that serialises fan-out onto
+  # a single instance.
   replicas: 3
   revisionHistoryLimit: 5
   selector:

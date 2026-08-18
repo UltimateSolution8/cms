@@ -205,7 +205,7 @@ public class ConsentManagerRelayService {
      * A withdrawal relayed from a Consent Manager.
      *
      * <p>Goes through the same {@code withdraw} every other surface uses, and therefore takes
-     * effect the instant it commits. DPDP s.6(6) requires withdrawal to be as easy as giving; a
+     * effect the instant it commits. DPDP s.6(4) requires withdrawal to be as easy as giving; a
      * principal who gave consent through a Consent Manager and withdraws there has done the easiest
      * thing available to them, and the platform has no business making it the slowest.
      */

@@ -315,15 +315,27 @@ worthless.
 | Breach SLA | `sweeper.breach-sla-interval` | 5 min | §9. Raises the two-stage Rule 7 obligations as they fall due. Five minutes rather than fifteen because the first leg is "without delay" and a quarter-hour of quiet is a quarter-hour of it |
 | Retention | `sweeper.retention-interval` | 6 h | Proposes retention actions; **never deletes**. `sweeper.retention-notice-lead-time` (default 7 days) is the Rule 8 pre-erasure notice window |
 | Re-confirmation | `sweeper.reconfirmation-interval` | 12 h | Korea only. Raises the Network Act Enforcement Decree Art. 62-3 two-year re-confirmation queue for KR entities. Disable with `sweeper.reconfirmation-enabled`; `sweeper.reconfirmation-batch-size` (default 500) bounds one pass |
+| Partition maintenance | `sweeper.partition-cron` | 03:40 daily | Provisions `enforcement_decision` partitions three months ahead and detaches past the retention ceiling. **Absent from this table until Phase 17**, which is why the sentence below counted six sweeps against seven sweepers — the job nobody listed is the one whose silent failure has no symptom for a quarter, and then every denial fails to record |
 
 Every job in this table has an `-enabled` flag of the same shape (`sweeper.expiry-enabled` and so
-on) and all six are now carried explicitly in `application.yml`. They were not: the three
+on) and all of them are now carried explicitly in `application.yml`. They were not: the three
 re-confirmation properties were absent from the file entirely, so an operator disabling sweeps by
 editing the block they could see would have left the Korean one running.
 
 ### 4.0 Leader election, and its silent failure mode
 
-All six sweeps take a PostgreSQL **session advisory lock** (`pg_try_advisory_lock`) before doing
+**The outbox relay is not one of these, and the arithmetic here was wrong twice over.** This
+sentence said "six" against seven sweepers, and the table above listed seven *jobs* only because
+partition maintenance was missing from it — so two errors happened to look consistent. Both are
+fixed above. The substantive point: the relay takes **no** lock, so all three replicas
+drain the same batch every two seconds — every subscriber receives each event up to three times and
+`webhook_delivery` carries up to three rows per attempt. The class javadoc concedes duplicate
+delivery for the crash window; systematic triplication as the steady state was described nowhere.
+`propagation_gap` is idempotent under this by its daily unique key rather than by a lock, and
+`for update skip locked` on `fetchUnpublished` is the real fix — scheduled on `ROADMAP.md` as its own
+change, because putting the relay under `SweepLock` would serialise fan-out onto one instance.
+
+All **seven sweeps** take a PostgreSQL **session advisory lock** (`pg_try_advisory_lock`) before doing
 anything. Two replicas otherwise page on-call twice for the same statutory breach, and send a
 principal two pre-erasure notices for the same record. A sweep that does not get the lock does
 nothing and says so at DEBUG — that is the normal case on every instance but one.
@@ -340,6 +352,51 @@ pins both the exclusivity and the release-after-a-throwing-sweep.
 steadily, assume nothing is running rather than that there is nothing to run. `select * from
 pg_locks where locktype = 'advisory'` names the holding backend.
 
+### 4.0a Propagation reconciliation — and the two artefacts that answer different questions
+
+After each message is drained, `PropagationReconciler` compares it against `propagation_target` — the
+register of systems that must be told — and records, once per system per day, any obligation the
+platform could not show was met. It runs **after** `markPublished`, never between it and `publish`:
+in between, a throwing evidence write would mark a delivered message failed and re-POST it to a
+downstream system. It swallows its own failures for the same reason and counts them on
+`uds.consent.propagation.failed_writes`.
+
+**Two questions, two places to look, and confusing them is the trap.**
+
+| Question | Where | Behaviour |
+|---|---|---|
+| *What is broken right now?* | `GET /v1/admin/propagation/targets`, `propagationUncovered` on `/actuator/health`, `uds_consent_propagation_uncovered` | Derived from the register. **Returns to zero** when an operator registers the missing subscription |
+| *What did we fail to show, and when?* | `GET /v1/admin/propagation/gaps` | Append-only, one row per system per day. **Never returns to zero, and nothing alerts on it** |
+
+**A persistently failing endpoint produces no gap rows, and this is the asymmetry to know about.**
+A message that fails to deliver stays unpublished and the relay breaks on it, so the reconciler never
+runs for that message at all. A downstream system that is *down* therefore shows up as `FAILED` rows
+in `webhook_delivery` and as the relay's escalation after ten attempts — while a *configuration* error
+(nobody registered, or a `system_code` typo) shows up in `propagation_gap`. Neither artefact alone
+answers *"is DenCRM current?"*; read both.
+
+**One row per system per day, and it names an exemplar rather than a census.** The gap's unique key
+is `(entity, topic, system_code, detected_on)` — it does **not** include the subject — so the first
+uncovered message of a day writes the row and later ones are discarded. The `subject_id` and
+`event_type` on it therefore name *one* principal whose message went untold, not all of them. That is
+a deliberate bound: admitting the subject would make growth targets × subjects × days, unbounded by
+population. **The consequence to hold on to is that `propagation_gap` is register-level evidence, not
+per-principal evidence**, and the evidence bundle's propagation section says so on the record rather
+than implying otherwise.
+
+**`NOT_DELIVERED` is rare in the shipped topology, and that is not a bug.** A delivery failure throws,
+which leaves the message unpublished and means the reconciler never runs for it; a success writes the
+`DELIVERED` row the coverage check looks for. So the three reasons are not three equally likely
+outcomes — in practice you will see `NO_SUBSCRIPTION` (a configuration error) and
+`NO_DELIVERY_CHANNEL` (the publisher cannot evidence anything), with `NOT_DELIVERED` reserved for the
+narrow case where a subscription matches and no successful delivery was recorded for that message.
+
+**Under the default `log` publisher the reason is always `NO_DELIVERY_CHANNEL`.** That is a fact about
+this deployment, not about any downstream system: only the webhook publisher writes delivery
+evidence, so the platform cannot observe arrival and does not pretend to. Switching
+`uds.consent.events.publisher` to `webhook` is what turns the register from a configuration check
+into evidence.
+
 ### 4.1 The rights-request SLA sweep
 
 Every open rights request carries a deadline fixed at intake from its type and jurisdiction —
@@ -349,7 +406,18 @@ The sweep compares them against the clock and logs:
 | Level | Meaning | Response |
 |---|---|---|
 | `WARN` | Falls due inside `sweeper.rights-sla-warning-window` (default 3 days) | There is still time. Make sure it is assigned |
-| `ERROR` | **Already past its deadline.** A statutory breach that has happened | Wake somebody. It repeats every pass until the request is closed, deliberately |
+| `ERROR` | **Already past its deadline.** | Wake somebody. It repeats every pass until the request is closed, deliberately |
+
+**`ERROR` does not always mean the group was late.** A request may be *born* overdue: a filing that
+genuinely arrived late — a letter found in a postbag, a backlog imported after an acquisition — is
+accepted with its real `receivedAt`, because refusing it is how an operator learns to file with
+today's date and destroy the provenance. Its deadline can already have passed on the first sweep,
+and the group had no opportunity to meet it.
+
+The two are different facts and a response that treats them alike is wrong in both directions.
+`RightsService` records `bornOverdue` on the intake's `admin_audit_event` detail; it is not yet on a
+route or a metric (`ROADMAP.md`), so today the check is a query against that event. **Confirm which
+one you have before escalating it as a breach.**
 
 **Wire `ERROR` from `RightsSlaSweeper` to the on-call channel.** The failure mode this exists for
 is not somebody deciding to miss a deadline — it is a request sitting in a queue nobody opened for
@@ -804,6 +872,19 @@ correlation id ends in minutes; one that starts with "it failed this afternoon" 
 | `uds.consent.capture` / `.capture.outcome` | timer, counter | Capture latency and accept/reject | A rejection spike means a capture surface is sending something invalid, and every one of those is consent not recorded |
 | `uds.consent.scrub` / `.scrub.identifiers` | timer, counter | Scrub latency and submitted/excluded counts | Coverage: a campaign that never scrubbed produces no counter movement at all |
 
+Three for propagation and the rights clock, added in Phase 17:
+
+| Metric | Type | What it means | Alert |
+|---|---|---|---|
+| `uds.consent.propagation.uncovered` | gauge | Mandatory `propagation_target` rows that no active subscription can reach | **> 0 for 30m, critical.** A system the group declared must be told about a withdrawal, that nothing can tell. Read over the *register*, so it returns to zero when the configuration is fixed — which is what makes it alertable at all |
+| `uds.consent.propagation.failed_writes` | gauge | Gap records the reconciler could not write | **> 0.** Consent changes are going out and what could not be shown to have arrived is not being recorded. The reconciler swallows these deliberately so an evidence write can never re-POST a delivered message; this is where they surface |
+| `uds.consent.rights.unverified_open` | gauge | Open rights requests whose clock started on an instant nobody verified | Threshold is **UDS's to set** (§8.6). `UNVERIFIED` refuses nothing by design; the *share* is what was undertaken to be watched. `V30` built the index for this question in Phase 16 and nothing asked it until now |
+
+**Nothing alerts on `propagation_gap`.** It is append-only history and its count only grows, so a
+rule over it would fire forever and be muted within a week — which is precisely how the first design
+of this phase would have failed. Read it through `GET /v1/admin/propagation/gaps` when investigating,
+not from a pager.
+
 Two more, added because both are silent until they are catastrophic:
 
 | Metric | Type | What it means | Alert |
@@ -842,6 +923,11 @@ The table above has listed the metrics worth an alert since the instrumentation 
 that was a description of an intention: nothing scraped them and nothing alerted on them. The rules
 fire on conditions where a named thing is wrong, never on traffic being unusual — a rule nobody
 trusts is a rule everybody silences, and then a real one is silenced with it.
+
+Thirteen rules as of Phase 17, which added `PropagationTargetUnreachable` (critical),
+`PropagationEvidenceWriteFailing` and `UnverifiedRightsRequestsOpen`. The first is the only critical
+rule in the file besides the ledger and evidence ones, and deliberately so: a processor the group
+cannot notify is a DPDP s.6(6) duty that cannot be discharged for as long as it holds.
 
 The last rule in the file is `ConsentPlatformScrapeFailing`, and it guards every other: none of them
 can fire while the target is not being scraped, and an alerting stack that has gone quiet looks
@@ -963,10 +1049,21 @@ So the assembly is an SOP, performed by the compliance team:
 2. For each entity, call the bundle **under that entity's own scope** — a credential or token scoped
    to it. A call that succeeds for an entity the caller is not scoped to is a defect to report, not
    a shortcut to use.
-3. **Read each bundle's `truncation` array before filing it.** A non-empty entry names the section,
-   the cap, and a ready-to-run request that returns the remainder; run it and attach the result.
-   Filing a capped bundle without its remainder is how a complete-looking answer omits the row the
-   complaint turns on.
+3. **Read each bundle's `truncation` array before filing it, and run *every* entry — not the first
+   one.** Each entry names the section, the cap, and a ready-to-run request that returns that
+   remainder; run each and attach the results. Filing a capped bundle without its remainder is how
+   a complete-looking answer omits the row the complaint turns on.
+
+   **A merged principal produces more than one entry per section, and this is the step where that
+   matters.** The cap is applied *per subject id*, because a person merged from several ids has
+   their history written under each and the receipt route reads one id at a time — so one pointer
+   over a concatenated list could not be run at all. A subject merged from three ids can therefore
+   produce three `receipts` entries, each with a different `subjectId` in its request. Read
+   `mergedFrom` at the top of the bundle: if it is non-empty, expect several, and check the
+   `subjectId` in each request rather than assuming they are the same call twice.
+
+   The person most likely to hit a cap is the long-lived, merged one — which is the same person
+   this step is most likely to be got wrong for.
 4. The assembled document must **name the fifteen calls it came from**, including the ones that
    returned nothing. "We hold nothing about this person at Matrix" is part of the answer, and a
    silence is indistinguishable from a call nobody made.

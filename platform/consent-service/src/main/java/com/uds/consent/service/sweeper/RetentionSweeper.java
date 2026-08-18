@@ -46,7 +46,7 @@ public class RetentionSweeper {
     private static final Logger log = LoggerFactory.getLogger(RetentionSweeper.class);
 
     /** The topic the owning systems subscribe to. */
-    static final String TOPIC_RETENTION = "uds.consent.retention";
+    public static final String TOPIC_RETENTION = "uds.consent.retention";
 
     private final ProcessingActivityStore activities;
     private final RetentionStore retention;

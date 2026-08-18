@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -58,6 +59,9 @@ class WebhookDeliveryIT extends PostgresIntegrationTest {
     private WebhookStore webhooks;
 
     @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
     private OutboxStore outbox;
 
     @Autowired
@@ -70,6 +74,29 @@ class WebhookDeliveryIT extends PostgresIntegrationTest {
 
     @BeforeEach
     void startReceiver() throws IOException {
+        // Start from an empty outbox, with nothing subscribed.
+        //
+        // Every suite that captures or withdraws consent enqueues an outbox row, and this class's
+        // assertions count what arrived at one receiver. So its results depended on how many
+        // messages happened to be undrained when it ran — it passed for as long as it ran early
+        // enough, and adding a suite that enqueues anything moved it. That is an order-dependent
+        // test rather than a wrong one, and the fix belongs here rather than in whichever suite
+        // happens to expose it next.
+        //
+        // Subscriptions are deactivated first so draining the backlog delivers nowhere; each test
+        // re-registers its own with subscribe().
+        // EVERY entity, not a named couple. Subscriptions belong to whichever suite created them
+        // and there are fifteen fiduciaries; a message for an entity whose endpoint died with some
+        // other test class breaks the relay just as effectively, and the relay stops the whole
+        // batch on the first failure.
+        jdbc.update("update webhook_subscription set active = false where active");
+        for (int pass = 0; pass < 25 && !outbox.fetchUnpublished(1).isEmpty(); pass++) {
+            relay.relay();
+        }
+
+        received.clear();
+        signatures.clear();
+
         server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/hook", exchange -> {
             received.add(new String(exchange.getRequestBody().readAllBytes(),

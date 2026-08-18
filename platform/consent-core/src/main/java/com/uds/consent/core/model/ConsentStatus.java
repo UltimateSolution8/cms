@@ -15,7 +15,7 @@ public enum ConsentStatus {
     /** The subject was asked and declined. Distinct from {@link #NOT_ASKED}. */
     DENIED(false),
 
-    /** Consent was given and later withdrawn. DPDP s.6(6): withdrawal is as easy as giving. */
+    /** Consent was given and later withdrawn. DPDP s.6(4): withdrawal is as easy as giving. */
     WITHDRAWN(false),
 
     /** No consent interaction has ever occurred for this subject and purpose. */

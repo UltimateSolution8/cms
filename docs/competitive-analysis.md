@@ -340,9 +340,14 @@ Sorted by what it would cost in a real evaluation. This is the section that matt
    the same. No competitor publishes throughput, so this is not a measured deficit against them — but a
    decision point serving fifty requests a second is not one a hundred-thousand-call-a-day dialer
    consults synchronously. The fix is the auth scheme and **there is no IdP to point OIDC at.**
-7. **An unauthenticated CPU-exhaustion path, open.** `RateLimitFilter` sits behind authentication, so
-   invalid credentials produce 401s and zero 429s at ~110 ms each — refusing costs the defender more than
-   the attacker. Interim mitigation only, `OPERATIONS.md` §12.2.
+7. **An unauthenticated CPU-exhaustion path — closed 18 August 2026, Phase 16.** It was open as
+   written: `RateLimitFilter` sat behind authentication, so invalid credentials produced 401s and zero
+   429s at ~110 ms each, and refusing cost the defender more than the attacker. `PreAuthRateLimitFilter`
+   now refuses ahead of the security chain, asserted as **429 and not 401** rather than merely as some
+   429. Two caveats kept rather than dropped: the ~110 ms figure **has not been re-measured**, and the
+   pre-auth ceiling is deliberately loose (400/s per address per instance) because behind a NAT it is one
+   bucket for a building — so a distributed flood still passes it and the ingress control is defence in
+   depth rather than absent. `OPERATIONS.md` §12.2, `CAPACITY.md` §7.
 8. **The platform cannot reach a person.** Nothing consumes `rights.verification.requested`, so **every
    portal submission expires unverified — and since the clock starts at verification, the portal cannot
    currently start a clock.** Every competitor here can email a data subject.
@@ -381,8 +386,9 @@ The structural borrowings and refusals from IAB TCF and Google Consent Mode v2 a
 design decisions about this platform rather than observations about competitors. In one line each, the
 five worth acting on:
 
-- **Borrow TCF's publisher restrictions**, resolved through the *existing* nearest-ancestor walk — the
-  one thing in the field we have no equivalent of.
+- **Borrow TCF's publisher restrictions** — the one structural idea in the field we have no equivalent
+  of. This line said "resolved through the *existing* nearest-ancestor walk"; no such walk exists for the
+  purpose registry (rules §3, Phase 16 closure C6), so it is a build rather than a reuse.
 - **Borrow `consentable: false` as registry data** — our validator already refuses consent for a DPDP
   s.7(i) legitimate use, and the registry does not carry the fact.
 - **Borrow `ConsentScreen` and `UseNonStandardTexts`** as capture-context fields inside the hash chain.

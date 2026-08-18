@@ -219,6 +219,38 @@ public class RightsRequestStore {
      * @param verificationDetail how, in the operator's words. Null on the portal path, where the
      *                   method is the whole answer
      */
+    /**
+     * Open requests whose statutory clock started on an instant nobody verified.
+     *
+     * <p>Closes the gap {@code V30} left. That migration created
+     * {@code idx_rights_open_verification} with the comment that this number "belongs on a
+     * dashboard rather than in an ad-hoc export written under time pressure" — and then nothing was
+     * ever written to read it. A control whose output nobody reads is not a control.
+     *
+     * <p><strong>The predicate is the index's, not this class's usual one</strong>, and that is
+     * deliberate rather than sloppy. Every other query here defines open as {@code closed_at is
+     * null}; the partial index predicates on {@code status in ('RECEIVED', 'IN_PROGRESS',
+     * 'AWAITING_SUBJECT')}. PostgreSQL will not prove one implies the other, so a query written the
+     * usual way could not use the index the migration created for exactly this question. The two
+     * definitions coincide in practice — a request leaves those three statuses precisely when it is
+     * closed — and the divergence is recorded on {@code ROADMAP.md} so that whichever is wrong gets
+     * fixed once rather than worked around twice.
+     *
+     * <p>Group-wide and untagged: read from the metrics registry, which has no caller to be scoped
+     * to. {@code UNVERIFIED} is not a defect in itself — the label refuses nothing, deliberately —
+     * but the share of open requests carrying it is a number UDS undertook to watch.
+     */
+    public long countOpenUnverified() {
+        Long count = jdbc.sql("""
+                        select count(*) from rights_request
+                         where verification_method = 'UNVERIFIED'
+                           and status in ('RECEIVED', 'IN_PROGRESS', 'AWAITING_SUBJECT')
+                        """)
+                .query(Long.class)
+                .single();
+        return count == null ? 0L : count;
+    }
+
     public record Request(String requestId, String entityId, String subjectId,
                           RightsRequestType type, Jurisdiction jurisdiction,
                           RightsRequestStatus status, Instant receivedAt, Instant dueAt,

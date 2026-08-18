@@ -53,9 +53,16 @@ public class DpdpModule implements JurisdictionModule {
         List<String> obligations = new ArrayList<>();
 
         if (basis.requiresConsentRecord()) {
-            // Rule 3 makes each of these a required element of the notice, and s.6(6) requires
-            // withdrawal to be as easy as giving. Surfaced as obligations so that a caller
+            // Rule 3 makes each of these a required element of the notice, and s.6(4) requires
+            // withdrawal to be as easy as giving — "the ease of doing so being comparable to the
+            // ease with which such consent was given". Surfaced as obligations so that a caller
             // rendering its own UI cannot omit them and still claim the decision permitted it.
+            //
+            // s.6(4), not s.6(6). s.6(6) is the separate and heavier duty to "cease and cause its
+            // Data Processors to cease processing" — the clause the propagation register answers
+            // to, and the one that must not be spent on this. The two were conflated here, in
+            // three other javadocs and in two rows of the traceability matrix, and a third-party
+            // review then reproduced the error out of this comment.
             obligations.add("provide-withdrawal-link");
             obligations.add("provide-grievance-link");
         }

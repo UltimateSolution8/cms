@@ -99,7 +99,14 @@ class RowLevelSecurityIT extends PostgresIntegrationTest {
             // Each of the three discloses something about another entity's operations that the
             // entity itself would not hand over.
             "subject_alias", "rights_fulfilment_action", "fulfilment_target",
-            "webhook_subscription", "webhook_delivery");
+            "webhook_subscription", "webhook_delivery",
+            // V31. propagation_gap names which of another entity's downstream systems were not
+            // told about a consent change, and propagation_target names which systems it holds
+            // data in at all — a map of another group company's integration estate, and of where
+            // it is behind. Both are written here as well as being derivable, because the two
+            // assertions have opposite shapes and only this one fails when a table is forgotten
+            // in the migration rather than in the list.
+            "propagation_target", "propagation_gap");
 
     /**
      * The tables that carry an {@code entity_id} and are open on purpose.

@@ -3,6 +3,8 @@ package com.uds.consent.service;
 import com.uds.consent.core.decision.DenialReason;
 import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.PartitionStore;
+import com.uds.consent.ledger.store.PropagationCoverageStore;
+import com.uds.consent.service.events.PropagationReconciler;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
 import com.uds.consent.policy.capture.CaptureViolation;
@@ -52,7 +54,9 @@ public class PlatformMetrics {
 
     public PlatformMetrics(MeterRegistry registry, OutboxStore outbox,
                            RightsRequestStore rights, EnforcementRecorder recorder,
-                           PartitionStore partitions, SigningKeyStore keys) {
+                           PartitionStore partitions, SigningKeyStore keys,
+                           PropagationCoverageStore propagation,
+                           PropagationReconciler reconciler) {
         this.registry = registry;
 
         this.decisionTimer = Timer.builder("uds.consent.decision")
@@ -89,6 +93,29 @@ public class PlatformMetrics {
                 store -> store.findOverdue(Instant.now(), 1000).size());
         registry.gauge("uds.consent.enforcement.failed_writes", recorder,
                 EnforcementRecorder::failedWrites);
+
+        // A system that must be told about a withdrawal and is not reachable. Read over the
+        // REGISTER — tens of rows — rather than over the outbox and delivery tables, which is what
+        // makes it cheap enough for every scrape and every probe.
+        //
+        // The reachability of zero is the whole design. An earlier draft counted unreconciled
+        // messages, which can never fall: a message published before a subscription existed is
+        // never re-published, so the count would have been permanently non-zero, the critical alert
+        // would have fired for the life of the database, and it would have been muted inside a
+        // week. This counts configuration, so fixing the configuration fixes the number.
+        registry.gauge("uds.consent.propagation.uncovered", propagation,
+                PropagationCoverageStore::uncoveredCount);
+
+        // Evidence about propagation that the platform could not write. Same shape and same reason
+        // as enforcement.failed_writes: above zero means consent changes are going out and what
+        // could not be shown to have arrived is not being recorded.
+        registry.gauge("uds.consent.propagation.failed_writes", reconciler,
+                PropagationReconciler::failedWrites);
+
+        // Open rights requests whose clock started on an instant nobody verified. V30 built the
+        // index for this question and nothing ever asked it.
+        registry.gauge("uds.consent.rights.unverified_open", rights,
+                RightsRequestStore::countOpenUnverified);
 
         // Two slow-moving conditions that have no symptom until they are catastrophic, which is
         // exactly the shape of thing a gauge is for. Both are reported on /actuator/health too;
