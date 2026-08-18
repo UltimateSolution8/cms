@@ -1,0 +1,203 @@
+# =====================================================================================
+# Prometheus alerting rules for the UDS Consent & Privacy Control Plane.
+#
+# OPERATIONS.md §11.2 has listed the metrics worth an alert since the instrumentation work.
+# Nothing scraped them and nothing alerted on them, so that table described an intention. This
+# file is the intention made operational.
+#
+#   kubectl apply -f deploy/observability/alerts.yaml
+#
+# Scrape target: the management port, 9090, path /actuator/prometheus. It is deliberately not on
+# the ingress — see deploy/k8s/service.yaml.
+#
+# A note on what is missing on purpose. There is no alert on "consent captured is lower than
+# usual", which is the kind of rule that looks insightful and pages somebody every public holiday.
+# Every rule below fires on a condition where a named thing is wrong, not on a shape of traffic
+# being unusual, because a rule nobody trusts is a rule everybody silences and then a real one is
+# silenced with it.
+# =====================================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: uds-consent
+  labels:
+    app.kubernetes.io/name: uds-consent
+    role: alert-rules
+spec:
+  groups:
+
+    # -----------------------------------------------------------------------------------
+    # Evidence. These are the ones that mean the platform's core claim is in doubt.
+    # -----------------------------------------------------------------------------------
+    - name: uds-consent.evidence
+      rules:
+
+        - alert: ConsentEvidenceWriteFailing
+          # An enforcement decision that could not be written is a decision the group took and
+          # cannot prove it took. The counter is cumulative since start-up, so any non-zero value
+          # means it has happened at least once on this instance and the evidence is already gone.
+          expr: uds_consent_enforcement_failed_writes > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Enforcement evidence writes are failing on {{ $labels.pod }}"
+            description: >-
+              {{ $value }} enforcement decision(s) could not be recorded. The platform is answering
+              decisions it cannot afterwards prove. Check the database and the append-only grants;
+              see OPERATIONS.md §3.
+            runbook: "docs/OPERATIONS.md#3-ledger-integrity"
+
+        - alert: ConsentLedgerNotReady
+          # readinessState goes DOWN when the nightly sweep finds a broken hash chain. Deliberately
+          # not wired to liveness: restarting the pod would find the same broken chain and
+          # crash-loop over a data condition no restart can fix. So this pages a human instead —
+          # which only works if the rule exists, which is the point of this file.
+          expr: up{job="uds-consent"} == 1 and on(pod) kube_pod_status_ready{condition="false"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "A consent instance is draining rather than serving"
+            description: >-
+              The instance is alive and not ready. Where the integrity sweep is the cause the chain
+              is broken and no restart will help — read the sweep output before doing anything, and
+              never repair by editing (OPERATIONS.md §3.3).
+
+    # -----------------------------------------------------------------------------------
+    # Statutory clocks. Each of these is a deadline in law rather than an internal target.
+    # -----------------------------------------------------------------------------------
+    - name: uds-consent.statutory
+      rules:
+
+        - alert: RightsRequestsOverdue
+          # Not "approaching" — past. Each one is a breach that has already happened, so the alert
+          # is about how long it stays true rather than about warning anybody in time.
+          expr: uds_consent_rights_overdue > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} rights request(s) past their statutory deadline"
+            description: >-
+              DPDP Rule 14(3) caps the response period the group publishes; StatutoryClock holds
+              30 days against a 90-day ceiling. Every request counted here is already late.
+            runbook: "docs/OPERATIONS.md#41-the-rights-request-sla-sweep"
+
+        - alert: OutboxBacklogGrowing
+          # The condition in which a dialer keeps calling somebody who withdrew twenty minutes ago:
+          # the withdrawal is recorded, correct, and has reached nothing. Growth over half an hour
+          # rather than a threshold, because the healthy absolute value depends on campaign volume
+          # and a fixed number would be wrong within a month.
+          expr: deriv(uds_consent_outbox_pending[30m]) > 0 and uds_consent_outbox_pending > 100
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Consent events are accumulating undelivered"
+            description: >-
+              {{ $value }} events pending and rising. Downstream systems are working from stale
+              consent state. Check the relay and the registered webhook subscriptions —
+              webhook_delivery records every attempt.
+
+        - alert: PartitionRunwayShort
+          # PartitionMaintenanceSweeper provisions three months ahead. Firing at one month means
+          # two consecutive months of the job not running, which is a silent degradation until the
+          # day an enforcement decision has nowhere to be written.
+          expr: uds_consent_partition_months_ahead < 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "enforcement_decision partitions run out in under a month"
+            description: >-
+              The partition sweeper provisions three months ahead. Under one month means it has not
+              run for two. When the runway reaches zero, every denial fails to record.
+
+    # -----------------------------------------------------------------------------------
+    # Service level. The objectives OPERATIONS.md §6 publishes, watched rather than asserted.
+    # -----------------------------------------------------------------------------------
+    - name: uds-consent.slo
+      rules:
+
+        - alert: DecisionLatencyOverObjective
+          # The published objective is 30 ms p95. Held for ten minutes because a single slow
+          # minute during a batch scrub is the system working, not the system failing — and
+          # docs/CAPACITY.md §2 explains why the denial-heavy profile is the slow one.
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le) (rate(uds_consent_decision_seconds_bucket[5m]))) > 0.030
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Decision p95 is over the 30 ms objective"
+            description: >-
+              p95 is {{ $value | humanizeDuration }}. Check connection-pool wait time first —
+              docs/CAPACITY.md §3 derives the pool size and names the ceiling that actually binds,
+              which is the database's max_connections rather than the application.
+
+        - alert: RateLimiterRefusingLegitimateTraffic
+          # A dialer being limited at projected volume is a capacity finding, not the limiter
+          # working. Tagged by route class only, so this says which class without naming a caller —
+          # that is in the log line, deliberately, and not in a permanent time series.
+          expr: sum by (route) (rate(uds_consent_ratelimit_refused_total[5m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sustained rate limiting on the {{ $labels.route }} routes"
+            description: >-
+              Either a caller is in a retry loop or the configured ceiling is below real volume.
+              The limiter is per instance, so N replicas permit N times the configured rate —
+              check the log for which credential before raising anything.
+
+        - alert: CaptureRejectionSpike
+          # Every rejection is consent not recorded. A surface sending something invalid looks
+          # entirely healthy from its own side, which is why this has to be watched from here.
+          expr: >-
+            sum(rate(uds_consent_capture_outcome_total{outcome!="ACCEPTED"}[10m]))
+              / clamp_min(sum(rate(uds_consent_capture_outcome_total[10m])), 0.001) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "More than 10% of consent submissions are being rejected"
+            description: >-
+              A capture surface is sending something the validator refuses. Each rejection is a
+              person whose consent was not recorded. uds_consent_capture_outcome_total carries a
+              violation tag naming the codes.
+
+    # -----------------------------------------------------------------------------------
+    # Custody. Slow-moving, and the reason each is here is that nobody notices them otherwise.
+    # -----------------------------------------------------------------------------------
+    - name: uds-consent.custody
+      rules:
+
+        - alert: SigningKeyOverdueForRotation
+          # 90 days, per OPERATIONS.md §2.2. Nothing breaks at 91 — which is exactly why an alert
+          # is needed, because a control whose violation has no symptom is one that quietly stops
+          # being followed.
+          expr: uds_consent_signing_key_age_days > 90
+          for: 24h
+          labels:
+            severity: warning
+          annotations:
+            summary: "The active snapshot signing key is {{ $value }} days old"
+            description: >-
+              Rotation is a runbook with a mechanism behind it — GET /v1/keys publishes ACTIVE and
+              RETIRED together, so snapshots signed under the outgoing key keep verifying.
+            runbook: "docs/OPERATIONS.md#22-snapshot-signing-keys"
+
+        - alert: ConsentPlatformScrapeFailing
+          # Last, and it guards every rule above it: none of them can fire if the target is not
+          # being scraped, and an alerting stack that goes quiet looks exactly like a healthy one.
+          expr: up{job="uds-consent"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Prometheus cannot scrape the consent platform"
+            description: >-
+              Every other rule in this file is silent while this is true. Check the management port
+              (9090) and the NetworkPolicy admitting the monitoring namespace.

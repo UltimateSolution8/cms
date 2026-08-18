@@ -2,6 +2,7 @@ package com.uds.consent.service.it;
 
 import org.junit.jupiter.api.Tag;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -26,6 +27,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 // here rather than on first deployment.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("integrationtest")
+// Makes every suite's HTTP client send X-UDS-Actor, which administrative mutations now require.
+// See IntegrationTestClient for why it is a RestTemplateBuilder rather than an interceptor added
+// after the fact — the short version is that withBasicAuth silently discards the latter.
+@Import(IntegrationTestClient.class)
 public abstract class PostgresIntegrationTest {
 
     static final PostgreSQLContainer<?> POSTGRES =

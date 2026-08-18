@@ -1,0 +1,156 @@
+# =====================================================================================
+# Service, ingress, disruption budget, autoscaling and network policy.
+#
+# Split from deployment.yaml because these are the objects an operator changes without
+# redeploying the application, and mixing the two produces a file where a TLS certificate
+# rotation and a JVM flag live in the same diff.
+# =====================================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uds-consent
+# No cluster permissions. The platform talks to PostgreSQL and to whatever webhook endpoints are
+# registered, and needs nothing from the Kubernetes API — so it is given nothing.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uds-consent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: uds-consent
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    # Scrape target. Deliberately on the Service and deliberately absent from the Ingress below —
+    # a Prometheus inside the cluster reaches it, and nothing outside the cluster can.
+    - name: management
+      port: 9090
+      targetPort: management
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: uds-consent
+spec:
+  # Two must survive a voluntary disruption. Not one: with a minimum of one, a node drain during
+  # a rolling deploy can leave a single pod serving every decision for the group, and the failure
+  # mode of an unavailable consent platform is that outbound campaigns either stop or proceed
+  # without checking. The second is the worse of the two and it is the one that happens.
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: uds-consent
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: uds-consent
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: uds-consent
+  minReplicas: 3
+  # Bounded by the database, not by the cluster. Each replica opens DB_POOL_SIZE connections, so
+  # twelve replicas at a pool of twenty is 240 connections — check that against the instance's
+  # max_connections before raising this. Scaling the application past what the database can
+  # accept converts a latency problem into a connection-refused outage.
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+  behavior:
+    scaleDown:
+      # Slow. Campaign traffic is bursty by nature — a dialer starts a list, finishes it, and
+      # starts another twenty minutes later — and scaling in between bursts means every burst
+      # pays a cold start on the JVM.
+      stabilizationWindowSeconds: 600
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: uds-consent
+  annotations:
+    # TLS terminates here. Two of this platform's routes are deliberately unauthenticated —
+    # GET /v1/notices/* and GET /v1/keys — which makes plaintext worse rather than better: a
+    # notice served over http can be rewritten in transit, and a subject consenting to a
+    # rewritten notice has not consented to anything.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    # A batch scrub carries up to a thousand identifiers and the platform caps it there. Two
+    # megabytes is comfortably above that and well below anything worth buffering.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["consent.uds.internal"]
+      secretName: uds-consent-tls
+  rules:
+    - host: consent.uds.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: uds-consent
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: uds-consent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: uds-consent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+    # The management port, and only from the monitoring namespace. This rule is the second half
+    # of the port split: moving the actuator off 8080 keeps it off the ingress, and this keeps it
+    # off everything else in the cluster. /actuator/prometheus needs no credential — see
+    # SecurityConfiguration for why — so this policy is the access control, not an optimisation.
+    #
+    # The kubelet's probe traffic is not covered by a NetworkPolicy and does not need to be:
+    # probes originate on the node, outside the pod network policy's scope.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+  egress:
+    # PostgreSQL, DNS, and the webhook endpoints. Deliberately narrow: the process holds the
+    # identifier pepper and the snapshot signing key in memory, and an egress-unrestricted pod
+    # holding both is a pod that can send them anywhere if it is ever compromised.
+    #
+    # Registered webhook endpoints are the one open direction, and they are inside the group's
+    # network. A subscription pointing outside it should be a deliberate, reviewed exception —
+    # adding a rule here is the review.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - port: 5432
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

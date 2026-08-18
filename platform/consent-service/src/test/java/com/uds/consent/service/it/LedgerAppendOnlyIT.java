@@ -142,6 +142,54 @@ class LedgerAppendOnlyIT extends PostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("an event captured at nanosecond precision still re-serialises to its payload")
+    void subMicrosecondPrecisionDoesNotLookLikeTampering() {
+        // Found by running the platform by hand, and it could not have been found any other way
+        // here: every other test in this suite passes a fixed instant or one truncated to seconds,
+        // so nothing in the build had ever carried a nanosecond component into the ledger. In
+        // production every event does — `Instant.now()` on a modern JVM has nanosecond resolution
+        // and PostgreSQL's timestamptz stores microseconds.
+        //
+        // The result was not a broken chain. The chain hashes the stored payload and the payload
+        // is stored verbatim, so `intact()` stayed true — which is precisely why nobody noticed.
+        // What broke was the PAYLOAD_DIVERGENCE check, the one that exists to catch somebody
+        // editing the structured columns without being able to forge the payload. It fired on
+        // every event ever written, and a detector that fires on everything detects nothing.
+        // Two sources of sub-microsecond precision, and both had to be closed. `occurredAt` comes
+        // from the caller, so the fixture supplies one with nanoseconds. `recordedAt` is
+        // `Instant.now()` inside the store, which nothing here controls — hence ten events rather
+        // than one: the store's value used to be *rounded* into the column and *truncated* into
+        // the payload, so any single event had roughly even odds of agreeing by luck. Ten leaves
+        // about one chance in a thousand of this test passing for the wrong reason.
+        String subject = newSubject();
+        Instant withNanos = Instant.parse("2026-08-15T09:00:00Z").plusNanos(123_456_789);
+        assertThat(withNanos.getNano() % 1_000)
+                .withFailMessage("the fixture lost its sub-microsecond digits; the test is vacuous")
+                .isNotZero();
+
+        for (int i = 0; i < 10; i++) {
+            ledger.record(grant(subject, "MKT_OUTBOUND_CALL",
+                    withNanos.plus(i, ChronoUnit.MINUTES)));
+        }
+
+        LedgerIntegrityVerifier.ChainVerification verification =
+                verifier.verifyChain(ENTITY, subject);
+
+        assertThat(verification.findings())
+                .withFailMessage("""
+                        a freshly written, untampered event was reported as diverging from its \
+                        own payload: %s. What is hashed must be what the evidence plane can \
+                        store, or this check is noise forever.""", verification.findings())
+                .isEmpty();
+        assertThat(verification.intact()).isTrue();
+
+        // And the truncation is visible rather than silent, so a reader comparing the receipt
+        // against the ledger sees the same instant in both.
+        assertThat(ledger.history(ENTITY, subject).get(0).event().occurredAt())
+                .isEqualTo(withNanos.truncatedTo(ChronoUnit.MICROS));
+    }
+
+    @Test
     @DisplayName("a superuser who disables the triggers and rewrites history is still caught")
     void tamperingBehindTheTriggersIsDetected() {
         // This is the scenario the hash chain exists for. Triggers and grants stop the application

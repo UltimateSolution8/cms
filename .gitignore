@@ -17,6 +17,12 @@ application-local-secrets.yml
 *.dump
 dumps/
 
+# Session tooling. The shared configuration under .claude/ — the working notes, the invariants, the
+# subagent roles, the phase gate — is tracked deliberately: it is the practice that produced this
+# repository and the next session needs it. Only the per-machine parts are ignored.
+.claude/settings.local.json
+.claude/state/last-verify
+
 # Tooling
 .DS_Store
 .idea/

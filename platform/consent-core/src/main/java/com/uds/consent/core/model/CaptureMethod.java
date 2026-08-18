@@ -32,6 +32,24 @@ public enum CaptureMethod {
     PARENTAL_VERIFIED(true),
 
     /**
+     * Given by the principal at a Consent Manager registered with the Board, and relayed here.
+     *
+     * <p>Affirmative, and this is the judgement in the enum that most deserves stating. The
+     * principal did take a clear affirmative action — they took it at their Consent Manager, which
+     * is exactly the mechanism DPDP s.6(7) and Rule 4 provide for, and a fiduciary that refused to
+     * treat it as consent would be refusing the statutory channel itself.
+     *
+     * <p>What differs is where the evidence sits. For every other affirmative method above, UDS
+     * holds the proof; here the proof is the Consent Manager's record and UDS holds a pointer to
+     * it — the registration number on the actor id, the CM's own reference for the principal, and
+     * the relay's evidence reference. That is why this is a distinct method rather than the CM
+     * relaying {@code CLICK_THROUGH}: the burden of proof does not move, but the place the proof
+     * is kept does, and an auditor must be able to see which it was without reading an attribute
+     * map.
+     */
+    RELAYED_BY_CONSENT_MANAGER(true),
+
+    /**
      * Loaded from an external source whose original lawful basis is documented in the
      * provenance store. Not itself an affirmative action — the provenance record carries the
      * proof, and where it cannot, the record is quarantined rather than contacted.

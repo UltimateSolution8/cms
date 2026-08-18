@@ -31,22 +31,60 @@ public class BlastRadiusService {
     }
 
     /**
-     * Impact of moving a purpose to {@code newVersion}.
+     * Impact of moving a purpose to {@code newVersion}, for a version that has been published.
+     *
+     * <p>Reads the material-change flag from the stored version. Only correct <em>after</em>
+     * publishing — see {@link #forPurposeChange(String, int, boolean)} for why that distinction
+     * matters and which method to call before.
      *
      * @param purposeCode purpose being changed
-     * @param newVersion  the version about to be published, or just published
+     * @param newVersion  the version that was published
      */
     @Transactional(readOnly = true)
     public Impact forPurposeChange(String purposeCode, int newVersion) {
-        boolean material = jdbc.sql("""
-                        select coalesce(bool_or(material_change), false) from purpose_version
+        // Selected as a row rather than aggregated. bool_or over no rows yields a row containing
+        // NULL rather than no rows at all, so an aggregate cannot distinguish "this version is not
+        // material" from "this version does not exist" — and that distinction is the whole point.
+        Boolean material = jdbc.sql("""
+                        select material_change from purpose_version
                          where purpose_code = :code and version = :version
                         """)
                 .param("code", purposeCode)
                 .param("version", newVersion)
                 .query(Boolean.class)
-                .single();
+                .optional()
+                .orElse(null);
 
+        if (material == null) {
+            // No such version. Previously this coalesced to false and produced a confident
+            // NOTICE_UPDATE_ONLY — the safest-sounding answer to a question that was never
+            // actually asked of the data. Refusing is the only honest option: the caller either
+            // mistyped a version or is asking before publishing, and both deserve to be told.
+            throw new IllegalArgumentException("purpose " + purposeCode + " has no version "
+                    + newVersion + "; to assess a version before publishing it, pass the "
+                    + "material-change judgement explicitly");
+        }
+
+        return impactForPurpose(purposeCode, newVersion, material);
+    }
+
+    /**
+     * Impact of a purpose change that has <em>not</em> been published yet.
+     *
+     * <p>This is the one to call before publishing, which is what the operations notes instruct and
+     * what the number is actually for — knowing that eleven thousand subjects need re-consent is
+     * only useful while there is still a choice about whether to make the change.
+     *
+     * <p>The material-change flag is a parameter rather than a lookup because before publication
+     * there is no row to look it up from. It is a human judgement about whether the change alters
+     * what the subject agreed to, and this service applies that judgement rather than forming one.
+     */
+    @Transactional(readOnly = true)
+    public Impact forPurposeChange(String purposeCode, int newVersion, boolean materialChange) {
+        return impactForPurpose(purposeCode, newVersion, materialChange);
+    }
+
+    private Impact impactForPurpose(String purposeCode, int newVersion, boolean material) {
         List<Bucket> buckets = jdbc.sql("""
                         select entity_id, status, count(*) as n from consent_artefact
                          where purpose_code = :code and purpose_version < :version
@@ -81,22 +119,43 @@ public class BlastRadiusService {
     }
 
     /**
-     * Impact of publishing a new notice version.
+     * Impact of a notice version that has been published.
      *
      * <p>Scoped through the purposes that point at the notice, since a notice is not consented to
      * directly — it is the text a purpose's consent was given against.
      */
     @Transactional(readOnly = true)
     public List<Impact> forNoticeChange(String noticeId, int newNoticeVersion) {
-        boolean material = jdbc.sql("""
-                        select coalesce(bool_or(material_change), false) from notice_version
+        Boolean material = jdbc.sql("""
+                        select material_change from notice_version
                          where notice_id = :noticeId and version = :version
                         """)
                 .param("noticeId", noticeId)
                 .param("version", newNoticeVersion)
                 .query(Boolean.class)
-                .single();
+                .optional()
+                .orElse(null);
 
+        if (material == null) {
+            throw new IllegalArgumentException("notice " + noticeId + " has no version "
+                    + newNoticeVersion + "; to assess a version before publishing it, pass the "
+                    + "material-change judgement explicitly");
+        }
+
+        return forNoticeChange(noticeId, newNoticeVersion, material);
+    }
+
+    /**
+     * Impact of a notice change that has not been published yet.
+     *
+     * <p>See {@link #forPurposeChange(String, int, boolean)}: before publication there is no row to
+     * read the flag from, and a lookup that quietly returns false in that case turns the one
+     * calculation whose job is to say "ask these people again" into one that says "carry on".
+     */
+    @Transactional(readOnly = true)
+    public List<Impact> forNoticeChange(String noticeId, int newNoticeVersion,
+                                        boolean materialChange) {
+        boolean material = materialChange;
         List<String> purposeCodes = jdbc.sql("""
                         select distinct purpose_code from purpose_version where notice_id = :noticeId
                         """)

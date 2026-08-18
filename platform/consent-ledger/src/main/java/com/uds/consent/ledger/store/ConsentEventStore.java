@@ -17,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,7 +87,14 @@ public class ConsentEventStore {
 
         ChainHead head = lockChainHead(candidate.entityId(), candidate.subjectId());
         long sequence = head.lastSequence() + 1;
-        Instant recordedAt = Instant.now();
+        // Truncated here as well as in ConsentEvent's constructor, because this value is used
+        // twice and only one of the two uses went through the record. The payload is serialised
+        // from `sequenced`, which truncates; the column below was written from this variable,
+        // which did not — and Timestamp.from rounds nanoseconds to the microsecond PostgreSQL
+        // stores rather than flooring them. The two therefore disagreed by up to a microsecond on
+        // roughly half of all events, which re-serialised to a different payload and reported as
+        // PAYLOAD_DIVERGENCE forever after.
+        Instant recordedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
         // The payload must be built from the event as it will be stored, sequence included,
         // because the sequence is part of what the hash attests to.
@@ -112,7 +120,10 @@ public class ConsentEventStore {
                 .param("applicationId", stored.applicationId())
                 .param("jurisdiction", name(stored.jurisdiction()))
                 .param("occurredAt", Timestamp.from(stored.occurredAt()))
-                .param("recordedAt", Timestamp.from(recordedAt))
+                // From `stored`, not from the local variable: the column and the hashed payload
+                // have to come from the same value or the divergence check is comparing the
+                // ledger against something that was never in it.
+                .param("recordedAt", Timestamp.from(stored.recordedAt()))
                 .param("expiresAt", stored.expiresAt() == null ? null : Timestamp.from(stored.expiresAt()))
                 .param("actorType", name(stored.actorType()))
                 .param("actorId", stored.actorId())
@@ -208,6 +219,37 @@ public class ConsentEventStore {
                 .param("purposeCode", purposeCode)
                 .query(ConsentEventStore::mapStored)
                 .list();
+    }
+
+    /**
+     * The most recent value a subject's chain carries for an event attribute.
+     *
+     * <p>Reads the attribute out of the structured column rather than out of
+     * {@code canonical_payload}, and the difference is worth stating: the payload is the hashed
+     * bytes, so a divergence between the two is itself evidence of tampering and is detected by the
+     * integrity sweep. This query is for reading a current fact cheaply, not for proving it — a
+     * caller that needs to prove it reads the chain and verifies it.
+     *
+     * <p>Written for the guardian verification a receipt needs to state, and left general because
+     * the next fact carried on attributes will want exactly this and should not need a second
+     * method shaped identically.
+     */
+    public Optional<String> latestAttribute(String entityId, String subjectId, String key) {
+        // jsonb_exists rather than the `?` operator: `?` is a JDBC placeholder, and the driver
+        // rewrites it before Postgres ever sees the jsonb meaning. The function form is the same
+        // operator and is unambiguous. The casts pin `->>` to its (jsonb, text) overload.
+        return jdbc.sql("""
+                        select attributes ->> cast(:key as text) from consent_event
+                         where entity_id = :entityId and subject_id = :subjectId
+                           and jsonb_exists(attributes, cast(:key as text))
+                         order by sequence_number desc
+                         limit 1
+                        """)
+                .param("entityId", entityId)
+                .param("subjectId", subjectId)
+                .param("key", key)
+                .query(String.class)
+                .optional();
     }
 
     public Optional<ConsentEvent> findByIdempotencyKey(String entityId, String idempotencyKey) {

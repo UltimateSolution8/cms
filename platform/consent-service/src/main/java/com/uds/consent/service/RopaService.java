@@ -74,7 +74,14 @@ public class RopaService {
                         .map(VendorStore.Vendor::name).toList());
 
         return new Ropa(entity, Instant.now(), entries, vendorList,
-                activities.findCrossBorder(entityId), gaps);
+                activities.findCrossBorder(entityId),
+                // Rule 13(4): transfers of a category the Government has prohibited a Significant
+                // Data Fiduciary from moving out of India. Separate from crossBorderTransfers,
+                // which is the Rule 15 report and binds every fiduciary, because those transfers
+                // are lawful and documentable and these are neither — the remediation is to stop,
+                // not to paper.
+                // Empty on every entity today, because no categories are notified.
+                activities.findRestrictedCrossBorder(entityId), gaps);
     }
 
     /**
@@ -189,13 +196,37 @@ public class RopaService {
         }
     }
 
+    /**
+     * @param crossBorderTransfers transfers out of India to document. Lawful, and listed so they
+     *                             can be shown to be. This is the DPDP <strong>Rule 15</strong>
+     *                             position, which binds every Data Fiduciary rather than only the
+     *                             Significant ones
+     * @param prohibitedTransfers  transfers of a category DPDP <strong>Rule 13(4)</strong> forbids
+     *                             a Significant Data Fiduciary moving out of India at all. (Cited
+     *                             as Rule 14 until V21; Rule 14 is rights and grievance redressal.)
+     *                             Not a documentation task: the remediation is to stop. Empty
+     *                             on every entity as at August 2026, because the Government has
+     *                             notified no categories — an empty list that has been checked
+     *                             being a different fact from one that has not
+     */
     public record Ropa(EntityStore.FiduciaryEntity entity, Instant generatedAt,
                        List<ActivityEntry> activities, List<VendorStore.Vendor> vendors,
-                       List<ProcessingActivityStore.Activity> crossBorderTransfers, Gaps gaps) {
+                       List<ProcessingActivityStore.Activity> crossBorderTransfers,
+                       List<ProcessingActivityStore.Activity> prohibitedTransfers, Gaps gaps) {
 
         /** Convenience for the console: does this entity have anything recorded at all. */
         public boolean populated() {
             return !activities.isEmpty();
+        }
+
+        /**
+         * Whether anything here is unlawful rather than merely undocumented.
+         *
+         * <p>Distinct from {@code gaps.complete()} on purpose. A gap is work outstanding; this is
+         * processing that must cease, and a report that ranked the two together would bury it.
+         */
+        public boolean hasProhibitedTransfer() {
+            return !prohibitedTransfers.isEmpty();
         }
     }
 }

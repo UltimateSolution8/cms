@@ -67,6 +67,62 @@ public class EntityStore {
         return chain;
     }
 
+    /**
+     * The contact points to publish for an entity, resolved up the parent chain.
+     *
+     * <p>The first caller {@link #inheritanceChain} has ever had, and it closes a live defect
+     * rather than filling in a design. {@code V3} seeds fifteen entities and gives not one of them
+     * a {@code dpo_contact} or a {@code grievance_uri}, while {@code ReceiptService} puts
+     * {@code dpoContact()} straight into the ISO/IEC TS 27560 receipt and falls back to
+     * {@code grievanceUri()} when the notice carries none. Every receipt issued so far has named a
+     * null contact point and a null grievance route — the two things DPDP Rule 3 requires a data
+     * principal be given a way to reach.
+     *
+     * <p>Resolved per field rather than per entity, deliberately. A subsidiary that publishes its
+     * own grievance route and shares the group DPO is the ordinary case, and taking the nearest
+     * ancestor that has <em>both</em> would silently discard the one it set.
+     *
+     * <p>Either field may still come back null — when nothing in the chain has been configured,
+     * which is the state the platform is in today. That is reported by {@code EntityContactCheck}
+     * at start-up rather than papered over with an invented address: a receipt naming an inbox
+     * nobody reads is worse than one naming none, because it looks discharged.
+     */
+    public Contacts resolveContacts(String entityId) {
+        String dpoContact = null;
+        String grievanceUri = null;
+        for (FiduciaryEntity ancestor : inheritanceChain(entityId)) {
+            if (dpoContact == null && isPresent(ancestor.dpoContact())) {
+                dpoContact = ancestor.dpoContact();
+            }
+            if (grievanceUri == null && isPresent(ancestor.grievanceUri())) {
+                grievanceUri = ancestor.grievanceUri();
+            }
+            if (dpoContact != null && grievanceUri != null) {
+                break;
+            }
+        }
+        return new Contacts(dpoContact, grievanceUri);
+    }
+
+    private static boolean isPresent(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    /**
+     * An entity's published contact points after inheritance.
+     *
+     * @param dpoContact   the nearest configured Data Protection Officer contact, or null when
+     *                     nothing in the chain has one
+     * @param grievanceUri the nearest configured grievance route, or null on the same terms
+     */
+    public record Contacts(String dpoContact, String grievanceUri) {
+
+        /** Whether both are answerable. False is a Rule 3 gap, not a cosmetic one. */
+        public boolean complete() {
+            return dpoContact != null && grievanceUri != null;
+        }
+    }
+
     private static FiduciaryEntity map(java.sql.ResultSet rs, int rowNum)
             throws java.sql.SQLException {
         return new FiduciaryEntity(

@@ -1,5 +1,7 @@
 package com.uds.consent.core.model;
 
+import java.util.Set;
+
 /**
  * Where a rights request has got to.
  *
@@ -48,5 +50,41 @@ public enum RightsRequestStatus {
     /** Whether the statutory clock is still running against this request. */
     public boolean isOpen() {
         return open;
+    }
+
+    /**
+     * The statuses this one may move to.
+     *
+     * <p>Written here rather than in the service because the statuses live here, and a state
+     * machine kept in a different module from the states it governs is a state machine that gets
+     * half-updated. Until this existed the only rules were "the request must be open" and "a
+     * terminal status needs a resolution", which permitted a request to bounce between
+     * {@code RECEIVED} and {@code AWAITING_SUBJECT} indefinitely — each bounce resetting nothing,
+     * the clock running throughout, and the queue reading as active work.
+     *
+     * <p><strong>{@code RECEIVED → FULFILLED} is deliberately legal</strong>, and it is the
+     * transition a reader would expect to be barred. A request satisfied on the call that reported
+     * it is a real thing that happens — a principal asks what is held about them and the agent
+     * reads it out — and forbidding it would not produce more work, it would teach operators to
+     * click through {@code IN_PROGRESS} on the way past to satisfy the machine. A state machine
+     * that people route around records less than one that admits the shortcut.
+     *
+     * <p>Moving backwards from {@code IN_PROGRESS} to {@code RECEIVED} is <em>not</em> legal:
+     * "nobody has looked at this yet" stops being true the moment somebody has, and un-assigning a
+     * request is what {@code assignedTo} is for. Terminal statuses go nowhere at all — a correction
+     * is a new request, which is what the service already told the caller.
+     */
+    public Set<RightsRequestStatus> permittedNext() {
+        return switch (this) {
+            case RECEIVED -> Set.of(IN_PROGRESS, AWAITING_SUBJECT, FULFILLED, REJECTED, WITHDRAWN);
+            case IN_PROGRESS -> Set.of(AWAITING_SUBJECT, FULFILLED, REJECTED, WITHDRAWN);
+            case AWAITING_SUBJECT -> Set.of(IN_PROGRESS, FULFILLED, REJECTED, WITHDRAWN);
+            case FULFILLED, REJECTED, WITHDRAWN -> Set.of();
+        };
+    }
+
+    /** Whether this request may move to {@code next}. */
+    public boolean canMoveTo(RightsRequestStatus next) {
+        return permittedNext().contains(next);
     }
 }

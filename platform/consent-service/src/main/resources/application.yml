@@ -49,16 +49,91 @@ server:
     include-stacktrace: never
 
 management:
+  # A separate port, and this is a security boundary rather than tidiness.
+  #
+  # /actuator/prometheus publishes denial reasons, capture volumes and rights-queue depth: an
+  # accurate picture of a regulated system's operations, served without a credential. On the
+  # traffic port it is one ingress rule away from the internet. On 9090 it is reachable from the
+  # scraper and the kubelet and from nothing else, because nothing routes to it.
+  #
+  # Everything moves together or the deployment crash-loops: deploy/k8s/deployment.yaml's probes
+  # and containerPort, deploy/k8s/service.yaml, the Dockerfile HEALTHCHECK, and
+  # docker/docker-compose.yml. A probe left pointing at 8080 fails on every pod, forever.
+  server:
+    port: ${MANAGEMENT_PORT:9090}
   endpoints:
     web:
       exposure:
+        # 'prometheus' arrived with micrometer-registry-prometheus, in the same change — the
+        # comment that used to sit here forbade adding one without the other, because an endpoint
+        # advertised in configuration and returning 404 is the documented-but-false behaviour this
+        # programme has corrected four times.
         include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized
+      # Liveness and readiness are different questions and were being answered by one endpoint,
+      # which is a deployment hazard rather than an untidiness. PlatformHealthIndicator reports
+      # DOWN when the integrity sweep finds a broken hash chain — correct, and exactly the wrong
+      # thing to hang a liveness probe on: an orchestrator would restart the pod, the sweep would
+      # find the same broken chain, and the platform would crash-loop over a data condition no
+      # restart can fix, taking the decision API down with it.
+      #
+      # So: liveness is the process being alive and nothing else. Readiness is whether this
+      # instance should receive traffic — the database, and the ledger being offerable as
+      # evidence. A broken chain drains the instance and pages somebody; it does not restart it.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,platform
+          show-details: when-authorized
   metrics:
     tags:
       application: uds-consent-control-plane
+  # Distributed tracing export, off unless somebody turns it on and gives it somewhere to send spans.
+  #
+  # This flag governs EXPORT, not instrumentation. Phase 11's comment here claimed tracing was
+  # entirely off by default; TracingIT found otherwise. Boot's ConditionalOnEnabledTracing reads
+  # `management.<exporter>.tracing.export.enabled` falling back to this key, and it gates the
+  # exporters only — spans are created whenever micrometer-tracing-bridge-otel is on the classpath,
+  # so traceId and spanId are in the log context in every configuration. That is wanted: a log line
+  # carries the id that would join it to a trace whether or not anybody is collecting traces.
+  #
+  # Off is the default because an exporter with no reachable collector retries on every span: CPU
+  # spent on the decision path to produce nothing. Span creation itself is not the cost that argument
+  # was made about — the 1.3 ms engine p50 measured in CAPACITY.md §7 already includes it, on a build
+  # with this flag false and spans being created. Set MANAGEMENT_TRACING_ENABLED=true and
+  # OTLP_ENDPOINT together or neither.
+  #
+  # 10% when on. A consent decision is a two-index-lookup request and the interesting traces are
+  # the slow ones, which sampling at a tenth still catches in volume; tracing every request would
+  # pay full instrumentation cost to produce ninety percent identical spans.
+  #
+  # CorrelationIdFilter already puts the caller's correlationId in MDC and it stays — it is the
+  # caller's identifier, it survives outside the trace system, and it is what a support
+  # conversation with Denave actually quotes. traceId and spanId join it rather than replace it.
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_ENABLED:false}
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.1}
+
+  # Where the spans go.
+  #
+  # This key is `management.otlp.tracing.endpoint`, and the version that shipped in Phase 11 was
+  # `otel.exporter.otlp.endpoint` — the OpenTelemetry SDK's own environment-variable name, which
+  # Spring Boot does not read. It bound to nothing. Setting OTLP_ENDPOINT appeared to configure a
+  # collector and did not; with tracing switched on, spans would have gone to Boot's default
+  # localhost:4318 and been dropped, and the symptom would have been "tracing is enabled and the
+  # collector is empty" — a day of looking in the wrong place.
+  #
+  # TracingIT asserts the bound value rather than the presence of the property, which is the only
+  # form of the test that would have caught this.
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
 uds:
   consent:
@@ -70,6 +145,38 @@ uds:
     # mobile numbers is small enough to enumerate, so unpeppered hashes are reversible.
     identifier-pepper: ${IDENTIFIER_PEPPER:}
     default-calling-code: "91"
+
+    # How long another instance may keep answering with the old purpose or application registry
+    # after a publish. The publishing instance refreshes immediately; this bounds the rest.
+    registry-refresh-interval: PT5M
+
+    # Regulatory surfaces built ahead of the obligation that triggers them. Both are correct,
+    # tested code for regimes that do not yet reach UDS, and both were running by default —
+    # a scheduled sweep and a write-capable relay for obligations nobody in the group owes.
+    #
+    # Off is a decision, not neglect. Each flag's javadoc on PlatformProperties.Features names
+    # what turns it back on; do not enable one without that condition having occurred.
+    features:
+      # Korea, Network Act Enforcement Decree Art. 62-3. On when Korean counsel confirms what
+      # follows from a recipient's silence, or Denave Korea markets at volume.
+      korea-reconfirmation: ${FEATURE_KOREA_RECONFIRMATION:false}
+      # DPDP Rule 4. On when UDS is registered with the Board AND a signing standard exists to
+      # verify a relay against — both, because registration without verification is the write
+      # surface without the control.
+      consent-manager-relay: ${FEATURE_CONSENT_MANAGER_RELAY:false}
+
+    rights:
+      # How far in the past a caller-supplied receivedAt may be. Not a data-quality check: the
+      # statutory deadline is computed from that instant, so one far enough back files a request
+      # already beyond its deadline — a breach written into the group's own record without one
+      # having happened. Ninety days sits at India's Rule 14(3) ceiling, so a genuine late entry
+      # inside the window still leaves a deadline the group could in principle have met.
+      #
+      # There is no forward equivalent to configure. A receivedAt in the future moves the deadline
+      # outward and is refused beyond ordinary clock skew, which is a shared constant rather than
+      # a setting — two definitions of "now" inside one evidence plane is not something to make
+      # configurable.
+      max-backdate: ${RIGHTS_MAX_BACKDATE:P90D}
 
     snapshot:
       validity: PT15M
@@ -91,28 +198,131 @@ uds:
       rights-sla-interval: PT15M
       rights-sla-batch-size: 500
       rights-sla-warning-window: P3D
+      # Far more often than the rights sweep, because the periods are not comparable. A rights
+      # deadline is measured in weeks; Rule 7's detailed report is 72 hours and its first leg
+      # has no allowance at all.
+      breach-sla-enabled: true
+      breach-sla-interval: PT5M
+      breach-sla-batch-size: 200
+      # Six-hourly. Retention periods are measured in years; a tighter cadence would raise the
+      # same proposals repeatedly without anything having changed.
+      retention-enabled: true
+      retention-interval: PT6H
+      retention-batch-size: 500
+      # Rule 8's floor is 48 hours. A week, because a notice arriving on a Friday evening for a
+      # Sunday erasure meets the letter of the Rule and none of its purpose.
+      retention-notice-lead-time: P7D
+      # Korea's Network Act Enforcement Decree Art. 62-3 two-year re-confirmation queue. Twelve
+      # hours because the obligation is dated to the day; a tighter loop would only multiply the
+      # chance of two replicas racing on the same insert.
+      #
+      # These three were absent from this file until now, which mattered more than an omitted
+      # default usually does: OPERATIONS.md §4 tells an operator they can disable a sweep by
+      # setting its enable flag, and an operator disabling every sweep in this block would have
+      # left the Korean one running.
+      # enforcement_decision is range-partitioned by month (V28) and needs next month's
+      # partition to exist before the first. Nightly, three months ahead — the headroom is what
+      # turns "this job stopped" from a silent degradation into something visible for a quarter.
+      # It creates and never drops: detaching a partition past retention is a decision with a
+      # legal dimension and belongs to a person, not a cron.
+      partition-cron: "0 40 2 * * *"
+      reconfirmation-enabled: true
+      reconfirmation-interval: PT12H
+      reconfirmation-batch-size: 500
+
+    # Per-caller ceilings, per instance. The platform had none anywhere — including on the two
+    # routes that need no credential — so a dialer in a retry loop was an outage, and the outage
+    # took the decision API with it.
+    #
+    # Per instance is a real limitation, not a simplification: N replicas allow N times these
+    # numbers in aggregate. It still bounds what one runaway caller does to one instance, which is
+    # the failure being defended against. Fleet-wide limiting needs shared state; when there is a
+    # Redis the counter moves there. Set enabled: false where a gateway already does this.
+    rate-limit:
+      enabled: ${RATE_LIMIT_ENABLED:true}
+      max-tracked-callers: 50000
+      # Unauthenticated, keyed by IP. A corporate NAT is one address for a whole building.
+      public-routes: { permits-per-second: 20, burst: 60 }
+      decision: { permits-per-second: 200, burst: 400 }
+      # Low on purpose: each call already carries up to 1000 identifiers, so 10/s is 10,000
+      # decisions per second from one caller — far above any real scrub.
+      batch: { permits-per-second: 10, burst: 20 }
+      capture: { permits-per-second: 100, burst: 200 }
+      admin: { permits-per-second: 50, burst: 100 }
+      other: { permits-per-second: 100, burst: 200 }
+      # Counted before authentication, keyed by address alone, so it cannot tell one caller from
+      # another and must not try. Loose on purpose: a corporate NAT is one address for a building,
+      # and Denave's dialer runs at 200/s on the decision path. Its job is that a flood of invalid
+      # credentials is refused before it costs a BCrypt verification each — the ~113 ms an
+      # unauthenticated 401 used to cost, measured in CAPACITY.md §7. A flood ceiling, not a
+      # fairness limit; fairness is the per-credential classes above.
+      pre-auth: { permits-per-second: 400, burst: 800 }
 
     events:
-      # 'log' needs no broker and is the right default for a developer machine. Switch to
-      # 'kafka' before any downstream system depends on hearing about withdrawals.
+      # Where consent changes go. One of:
+      #
+      #   log      — writes them and nothing else. Right for a developer machine, and the reason
+      #              the platform was pull-only: correct, immediate, and reaching nobody.
+      #   kafka    — publishes to the broker. Better at high fan-out; needs a consumer per
+      #              downstream system, which is a deployable per team.
+      #   webhook  — POSTs to the endpoints registered at /v1/admin/subscriptions, signed with
+      #              HMAC-SHA256 and recorded in webhook_delivery. Needs the receiving system to
+      #              expose one endpoint, which is how DenCRM can be hearing about withdrawals
+      #              this week rather than next quarter.
+      #
+      # Switch off 'log' before any downstream system depends on hearing about a withdrawal.
       publisher: ${EVENT_PUBLISHER:log}
       topic: uds.consent.events
       relay-batch-size: 200
       relay-interval: PT2S
 
     security:
+      # Bearer tokens from the group's OIDC provider. Inert until an issuer or a public key is
+      # set — a resource server with no way to validate a token rejects every one of them, and
+      # that surfaces as a 500 on the authentication path rather than as "not configured".
+      #
+      # This does NOT switch Basic off. Both schemes run together so that adopting OIDC is not a
+      # flag day across the dialer, DenCRM and every capture surface at once; set basic-enabled
+      # to false per environment once the last caller has moved.
+      #
+      # Two claims carry weight beyond authentication:
+      #   entity_id  — the fiduciary this token may act for. ABSENT MEANS GROUP LEVEL, the same
+      #                grant an unscoped client credential has. An issuer that omits it for a
+      #                scoped integration hands that integration every entity in the group.
+      #   preferred_username — the human, written to admin_audit_event.actor_id. Under a token
+      #                X-UDS-Actor is ignored entirely; see Actor.
+      jwt:
+        issuer-uri: ${OIDC_ISSUER_URI:}
+        public-key: ${OIDC_PUBLIC_KEY:}
+        # Unset accepts any token the issuer signed — usually wrong where one provider fronts
+        # several services, since a token minted for another of them would authenticate here.
+        audience: ${OIDC_AUDIENCE:}
+        roles-claim: scope
+        entity-claim: entity_id
+        scope-roles:
+          consent.decision: DECISION
+          consent.capture: CAPTURE
+          consent.admin: ADMIN
+          consent.relay: CONSENT_MANAGER
+      basic-enabled: ${BASIC_AUTH_ENABLED:true}
       clients:
         # Development credentials only. Real deployments source these from the secret store,
         # and the destination is the group's OIDC provider rather than Basic auth at all.
         denave-web:
           password: ${CLIENT_DENAVE_WEB_PASSWORD:}
           roles: [CAPTURE]
+          # Scoped. Denave's website has no business reading Matrix's candidate records, and
+          # before this claim existed one changed string in a query would have let it.
+          entity-id: DENAVE_IN
         athena-dialer:
           password: ${CLIENT_ATHENA_DIALER_PASSWORD:}
           roles: [DECISION]
+          entity-id: DENAVE_IN
         compliance-console:
           password: ${CLIENT_CONSOLE_PASSWORD:}
           roles: [ADMIN]
+          # Deliberately unscoped: group compliance has to see every entity. Named in the
+          # start-up log so the list of credentials that can is checkable rather than implied.
 
 logging:
   level:
@@ -120,6 +330,40 @@ logging:
     # Every denial is logged with its reason code. Raise to DEBUG when investigating why a
     # campaign is being scrubbed harder than expected.
     com.uds.consent.policy: INFO
+
+---
+# Structured logging, for any environment with a log aggregator in front of it.
+#
+# Spring Boot 3.4 onwards emits ECS, GELF or Logstash JSON natively, so this costs no dependency
+# — which matters, because it is the one part of the observability gap that could be closed
+# without one. CorrelationIdFilter already puts correlationId in the MDC, so it lands in every
+# line as a field rather than as text somebody has to regex out of a message.
+#
+# A separate profile rather than the default: a developer reading a terminal wants the readable
+# format, and forcing JSON on them is how people start piping logs through jq to work.
+spring:
+  config:
+    activate:
+      on-profile: json-logging
+
+logging:
+  structured:
+    format:
+      console: ecs
+  # ECS carries service.name and service.version, which is what tells one instance's lines from
+  # another's once there are more than one.
+  include-application-name: true
+  # Three identifiers on every line, and they answer different questions:
+  #
+  #   correlationId — the caller's, set by CorrelationIdFilter. It survives outside the trace
+  #                   system and it is the one a Denave engineer quotes in a support thread.
+  #   traceId       — the trace, when tracing is on. Joins these lines to spans in the collector.
+  #   spanId        — which operation inside that trace produced the line.
+  #
+  # Listed explicitly rather than relying on the ECS format's defaults, so that turning tracing
+  # off does not silently remove correlation from the logs along with it.
+  correlation:
+    enabled: true
 
 ---
 # Local development. Everything here is unsuitable for a shared environment and says so.

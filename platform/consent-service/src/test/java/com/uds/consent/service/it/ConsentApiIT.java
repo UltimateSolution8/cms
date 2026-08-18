@@ -65,11 +65,11 @@ class ConsentApiIT extends PostgresIntegrationTest {
     @DisplayName("a pre-ticked box comes back as 422 with the violation named")
     void invalidCaptureIsRefusedWithReasons() {
         String subject = "it-" + UUID.randomUUID();
-        ConsentApi.CaptureRequest request = new ConsentApi.CaptureRequest(ENTITY, subject, null,
+        ConsentApi.CaptureRequest request = new ConsentApi.CaptureRequest(ENTITY, subject, null, null,
                 Jurisdiction.IN, "en", Channel.WEB, "DENAVE_WEB", CaptureMethod.CHECKBOX_OPT_IN,
                 ActorType.SUBJECT, subject, NOTICE, 1,
                 List.of(new ConsentApi.PurposeChoiceDto("MKT_OUTBOUND_CALL", true, true, true)),
-                true, Instant.now(), "http-" + subject, null, Map.of());
+                true, Instant.now(), "http-" + subject, null, Map.of(), null);
 
         ResponseEntity<ConsentApi.CaptureResponse> response = asCapture()
                 .postForEntity("/v1/consent", request, ConsentApi.CaptureResponse.class);
@@ -134,11 +134,11 @@ class ConsentApiIT extends PostgresIntegrationTest {
     void subjectMayBeIdentifiedByAHashedIdentifier() {
         String phone = "+9198765" + (10000 + (int) (Math.random() * 89999));
         ConsentApi.CaptureRequest request = new ConsentApi.CaptureRequest(ENTITY, null,
-                new ConsentApi.SubjectRef(IdentifierType.PHONE, phone), Jurisdiction.IN, "en",
+                new ConsentApi.SubjectRef(IdentifierType.PHONE, phone), null, Jurisdiction.IN, "en",
                 Channel.WEB, "DENAVE_WEB", CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
                 "agent-1", NOTICE, 1,
                 List.of(new ConsentApi.PurposeChoiceDto("MKT_OUTBOUND_CALL", true, false, true)),
-                true, Instant.now(), "phone-" + phone, null, Map.of());
+                true, Instant.now(), "phone-" + phone, null, Map.of(), null);
 
         ConsentApi.CaptureResponse response = asCapture()
                 .postForObject("/v1/consent", request, ConsentApi.CaptureResponse.class);
@@ -165,11 +165,11 @@ class ConsentApiIT extends PostgresIntegrationTest {
     // -------------------------------------------------------------------------------------------
 
     private static ConsentApi.CaptureRequest captureRequest(String subjectId) {
-        return new ConsentApi.CaptureRequest(ENTITY, subjectId, null, Jurisdiction.IN, "en",
+        return new ConsentApi.CaptureRequest(ENTITY, subjectId, null, null, Jurisdiction.IN, "en",
                 Channel.WEB, "DENAVE_WEB", CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
                 subjectId, NOTICE, 1,
                 List.of(new ConsentApi.PurposeChoiceDto("MKT_OUTBOUND_CALL", true, false, true)),
-                true, Instant.now(), "http-" + subjectId, "evidence://form/1", Map.of());
+                true, Instant.now(), "http-" + subjectId, "evidence://form/1", Map.of(), null);
     }
 
     private TestRestTemplate asCapture() {

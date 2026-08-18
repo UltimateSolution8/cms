@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -114,10 +115,105 @@ class GoldenDecisionSuiteTest {
                     NOW.plus(7, ChronoUnit.DAYS))
                     .evaluate(request("TXN_SERVICE_SMS", Channel.SMS, Jurisdiction.IN, NOW));
 
+            // The obligations name the registration since the February 2025 work. A bare
+            // "use-dlt-registered-template" told the sender something it already knew; what it
+            // needs is which one, and that is what a mis-send is caught on.
             assertThat(decision.obligations()).contains(
                     "scrub-against-ncpr-before-send",
-                    "use-dlt-registered-header",
-                    "use-dlt-registered-template");
+                    "use-dlt-registered-header:DENSRV",
+                    "use-dlt-registered-template:PENDING_REGISTRATION");
+        }
+
+        @Test
+        @DisplayName("a subscriber who opted out 30 days ago may not be re-solicited")
+        void theNinetyDayCoolingOffBites() {
+            // The commercially sharp rule in the whole platform. The re-permissioning campaign
+            // against Denave's quarantined records is the point of the provenance work, and
+            // re-soliciting consent inside ninety days of an opt-out is exactly what TRAI's
+            // February 2025 amendment restricts. A platform that merely advised against it would
+            // be waving through the campaign it exists to govern.
+            DecisionResponse decision = Fixtures.engineWithOptOut(Fixtures.fullCatalog(),
+                            new Fixtures.Artefacts().with("MKT_OUTBOUND_CALL",
+                                    ConsentStatus.GRANTED, null),
+                            NOW.minus(30, ChronoUnit.DAYS))
+                    .evaluate(request("MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN,
+                            NOW));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.WITHIN_COOLING_OFF_PERIOD);
+            // The date the campaign may resume, in the answer, because the next question is
+            // always "when can we".
+            assertThat(decision.explanation()).contains("ninety days");
+        }
+
+        @Test
+        @DisplayName("the cooling-off runs out at ninety days and the purpose becomes available")
+        void theCoolingOffIsNotPermanent() {
+            DecisionResponse decision = Fixtures.engineWithOptOut(Fixtures.fullCatalog(),
+                            new Fixtures.Artefacts().with("MKT_OUTBOUND_CALL",
+                                    ConsentStatus.GRANTED, null),
+                            NOW.minus(91, ChronoUnit.DAYS))
+                    .evaluate(request("MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN,
+                            NOW));
+
+            // A rule that never released would be a permanent ban rather than a cooling-off, and
+            // would quietly cost the group every contact who ever unsubscribed.
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the cooling-off does not reach non-commercial channels")
+        void theCoolingOffIsScopedToCommercialCommunication() {
+            // TCCCPR governs commercial communication. Applying its cooling-off to, say, an
+            // employment record would stop lawful processing on the strength of a marketing
+            // preference, which is a different thing entirely.
+            DecisionResponse decision = Fixtures.engineWithOptOut(Fixtures.fullCatalog(),
+                            new Fixtures.Artefacts(), NOW.minus(1, ChronoUnit.DAYS))
+                    .evaluate(request("HR_EMPLOYMENT_ADMIN", null, Jurisdiction.IN, NOW));
+
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an SMS decision names the header, the template and the category")
+        void theDltRegistrationIsNamedRatherThanAsserted() {
+            // "use-dlt-registered-header" told a sender something it already knew. What it needs
+            // is which header, which template and under which category — the join a TRAI
+            // investigation asks about, and the thing a mis-send is caught on.
+            DecisionResponse decision = Fixtures.engine(Fixtures.fullCatalog(),
+                            new Fixtures.Artefacts().with("MKT_OUTBOUND_SMS",
+                                    ConsentStatus.GRANTED, null))
+                    .evaluate(request("MKT_OUTBOUND_SMS", Channel.SMS, Jurisdiction.IN, NOW));
+
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(decision.obligations()).contains(
+                    "use-dlt-registered-header:DENAVE",
+                    "use-dlt-registered-template:1107160000000012345",
+                    "dlt-message-category:P",
+                    // 140- for promotional, 1600- for transactional.
+                    "originate-from-series:140",
+                    // Added by the February 2025 amendment.
+                    "include-opt-out-link-in-message");
+        }
+
+        @Test
+        @DisplayName("an unregistered template is surfaced before the campaign, not during it")
+        void anUnregisteredTemplateIsFlagged() {
+            DecisionResponse decision = engineWithGrant("TXN_SERVICE_SMS",
+                    NOW.plus(7, ChronoUnit.DAYS))
+                    .evaluate(request("TXN_SERVICE_SMS", Channel.SMS, Jurisdiction.IN, NOW));
+
+            // Allowed, because the consent is real and the platform is not the system of record
+            // for DLT registration — denying would stop a campaign over a configuration gap
+            // somebody else owns. Flagged, because the operator will reject the send anyway and
+            // finding that out now is strictly better than finding it out mid-campaign.
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(decision.obligations()).contains("dlt-template-not-yet-registered");
+            // Transactional traffic is not promotional traffic: no opt-out link obligation, and a
+            // different header and series.
+            assertThat(decision.obligations()).contains("dlt-message-category:S",
+                            "originate-from-series:1600")
+                    .doesNotContain("include-opt-out-link-in-message");
         }
 
         @Test
@@ -207,7 +303,7 @@ class GoldenDecisionSuiteTest {
                     new Fixtures.Artefacts().with("WEB_ADVERTISING", ConsentStatus.GRANTED, null));
 
             DecisionResponse decision = engine.evaluate(new DecisionRequest(ENTITY, SUBJECT,
-                    "WEB_ADVERTISING", Channel.WEB, Jurisdiction.IN, "APP", NOW, null, null, null,
+                    "WEB_ADVERTISING", Channel.WEB, Jurisdiction.IN, Fixtures.APP, NOW, null, null, null,
                     Map.of("subject.isChild", "true")));
 
             assertThat(decision.reason()).isEqualTo(DenialReason.CHILD_SUBJECT_RESTRICTED);
@@ -220,12 +316,36 @@ class GoldenDecisionSuiteTest {
                     new Fixtures.Suppressions(), true, true);
 
             DecisionResponse decision = engine.evaluate(new DecisionRequest(ENTITY, SUBJECT,
-                    "WEB_STRICTLY_NECESSARY", Channel.WEB, Jurisdiction.IN, "APP", NOW, null, null,
+                    "WEB_STRICTLY_NECESSARY", Channel.WEB, Jurisdiction.IN, Fixtures.APP, NOW, null, null,
                     null, Map.of("subject.isChild", "true")));
 
             assertThat(decision.isAllowed()).isTrue();
             assertThat(decision.obligations()).contains(
                     "no-behavioural-tracking-of-children", "no-targeted-advertising-to-children");
+        }
+
+        @Test
+        @DisplayName("age is read as at the decision instant, not as at today")
+        void theAgeQuestionIsAskedAsAtTheDecisionInstant() {
+            // The bug this exists to prevent, stated plainly: a subject who was fifteen when the
+            // dialer asked and is nineteen when somebody replays the decision. If the engine reads
+            // a current flag, the replay answers "adult" and every behavioural-tracking decision
+            // taken while they were a minor reads back as lawful. An evidence plane may be wrong;
+            // it may not be wrong in the direction that exonerates.
+            Instant eighteenthBirthday = NOW.plus(Duration.ofDays(365 * 3));
+            PolicyEngine engine = Fixtures.engineWithSubjectAdultFrom(Fixtures.fullCatalog(),
+                    new Fixtures.Artefacts().with("WEB_ADVERTISING", ConsentStatus.GRANTED, null),
+                    eighteenthBirthday);
+
+            DecisionResponse asItStood = engine.evaluate(
+                    request("WEB_ADVERTISING", Channel.WEB, Jurisdiction.IN, NOW));
+            assertThat(asItStood.reason()).isEqualTo(DenialReason.CHILD_SUBJECT_RESTRICTED);
+
+            // The same engine, the same subject, a later instant. The answer is allowed to change
+            // — what it may not do is change retrospectively, which the first assertion pins.
+            DecisionResponse afterwards = engine.evaluate(request("WEB_ADVERTISING", Channel.WEB,
+                    Jurisdiction.IN, eighteenthBirthday.plus(Duration.ofDays(1))));
+            assertThat(afterwards.reason()).isNotEqualTo(DenialReason.CHILD_SUBJECT_RESTRICTED);
         }
     }
 
@@ -264,6 +384,288 @@ class GoldenDecisionSuiteTest {
 
             assertThat(engine.evaluate(request("HR_EMPLOYMENT_ADMIN", null, Jurisdiction.IN, NOW))
                     .isAllowed()).isTrue();
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // The United States beyond California
+    // -------------------------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("US state privacy laws — opt-out, universal signals, and one outright ban")
+    class UnitedStates {
+
+        @Test
+        @DisplayName("a granted consent still denies where the state bans the processing outright")
+        void consentIsNotTheTopLevelGate() {
+            // The case worth having, because the intuition it violates is so common. Maryland bans
+            // the sale of sensitive data outright and consent does not cure it — so a freely
+            // given, current, itemised consent must still produce a denial. A platform built on
+            // "consent decides" gets this wrong and looks entirely reasonable doing it.
+            //
+            // The engine already expresses it: a purpose with no legal-basis row for a
+            // jurisdiction is refused at Gate 3, before any consent record is read. That makes
+            // this a taxonomy decision rather than an engine change, which is exactly why it needs
+            // a test — nothing in the code would break if somebody published a Maryland basis.
+            PurposeDefinition sensitiveSale = Fixtures.sensitivePurpose(
+                    "SENSITIVE_DATA_SALE",
+                    Map.of(Jurisdiction.US_CA, LegalBasis.CONSENT),
+                    Set.of(Channel.EMAIL), ExpiryPolicy.NONE, null, FailureBehavior.FAIL_CLOSED,
+                    Set.of("HEALTH"), Set.of("HEALTH"), Set.of(), false, false, false);
+
+            PolicyEngine engine = Fixtures.engine(
+                    Fixtures.fullCatalog().with(sensitiveSale),
+                    new Fixtures.Artefacts().with("SENSITIVE_DATA_SALE", ConsentStatus.GRANTED,
+                            null));
+
+            DecisionResponse maryland = engine.evaluate(request("SENSITIVE_DATA_SALE",
+                    Channel.EMAIL, Jurisdiction.US_MD, NOW));
+
+            assertThat(maryland.isAllowed()).isFalse();
+            assertThat(maryland.reason())
+                    .isEqualTo(DenialReason.PURPOSE_NOT_PERMITTED_IN_JURISDICTION);
+
+            // And the same purpose, the same consent, permitted in California — so the denial is
+            // the jurisdiction's doing rather than a purpose nobody configured properly.
+            assertThat(engine.evaluate(request("SENSITIVE_DATA_SALE", Channel.EMAIL,
+                    Jurisdiction.US_CA, NOW)).isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the universal opt-out obligation appears only where it is required")
+        void theUniversalOptOutObligationIsScoped() {
+            // Emitting it everywhere would be harmless advice in the states that do not mandate it
+            // and would make the twelve that do indistinguishable from the rest — which is
+            // precisely the distinction an operations team needs when deciding where to spend the
+            // integration effort.
+            DecisionResponse colorado = allowedIn(Jurisdiction.US_CO);
+            assertThat(colorado.obligations()).contains("honour-universal-opt-out-signal");
+
+            DecisionResponse utah = allowedIn(Jurisdiction.US_UT);
+            assertThat(utah.obligations()).doesNotContain("honour-universal-opt-out-signal");
+            // The do-not-sell link is required in both, so the difference above is the mandate
+            // rather than the module having failed to run.
+            assertThat(utah.obligations()).contains("provide-do-not-sell-or-share-link");
+        }
+
+        @Test
+        @DisplayName("twelve states require a universal opt-out, and the enum says which")
+        void theMandateListLivesInOnePlace() {
+            // A predicate on the enum rather than a constant scattered through the modules: the
+            // list changes every legislative session, and one that lives in one place gets
+            // updated once.
+            assertThat(java.util.Arrays.stream(Jurisdiction.values())
+                    .filter(Jurisdiction::usesUniversalOptOut)
+                    .toList())
+                    .containsExactlyInAnyOrder(Jurisdiction.US_CA, Jurisdiction.US_CO,
+                            Jurisdiction.US_CT, Jurisdiction.US_TX, Jurisdiction.US_OR,
+                            Jurisdiction.US_MT, Jurisdiction.US_DE, Jurisdiction.US_NJ,
+                            Jurisdiction.US_NE, Jurisdiction.US_NH, Jurisdiction.US_MN,
+                            Jurisdiction.US_MD);
+        }
+
+        @Test
+        @DisplayName("a universal opt-out outranks a live consent record")
+        void theSignalBeatsTheConsent() {
+            // It arrives as a statutory suppression, which is what it is: from outside, binding,
+            // and unanswerable by a consent row. The same machinery as a preference register,
+            // pointed at a different source.
+            PurposeDefinition advertising = Fixtures.purpose("US_ADVERTISING",
+                    Map.of(Jurisdiction.US_CA, LegalBasis.CONSENT), Set.of(Channel.WEB),
+                    ExpiryPolicy.NONE, null, FailureBehavior.FAIL_CLOSED,
+                    Set.of("WEB_BEHAVIOUR"), false, false, false);
+
+            PolicyEngine engine = Fixtures.engine(
+                    Fixtures.fullCatalog().with(advertising),
+                    new Fixtures.Artefacts().with("US_ADVERTISING", ConsentStatus.GRANTED, null),
+                    new Fixtures.Suppressions().universalOptOut(Channel.WEB), true, false);
+
+            DecisionResponse decision = engine.evaluate(
+                    request("US_ADVERTISING", Channel.WEB, Jurisdiction.US_CA, NOW));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.SUPPRESSED_STATUTORY);
+        }
+
+        @Test
+        @DisplayName("a sensitive-data purpose carries the restriction obligation")
+        void sensitiveDataIsFlaggedEverywhere() {
+            PurposeDefinition sensitive = Fixtures.sensitivePurpose("US_SENSITIVE_MARKETING",
+                    Map.of(Jurisdiction.US_CA, LegalBasis.CONSENT), Set.of(Channel.EMAIL),
+                    ExpiryPolicy.NONE, null, FailureBehavior.FAIL_CLOSED,
+                    Set.of("HEALTH"), Set.of("HEALTH"), Set.of(), false, false, false);
+
+            DecisionResponse decision = Fixtures.engine(
+                            Fixtures.fullCatalog().with(sensitive),
+                            new Fixtures.Artefacts().with("US_SENSITIVE_MARKETING",
+                                    ConsentStatus.GRANTED, null))
+                    .evaluate(request("US_SENSITIVE_MARKETING", Channel.EMAIL, Jurisdiction.US_CA,
+                            NOW));
+
+            // Read from data_category rather than inferred from the code, which is the correction
+            // item 1 made and the reason this assertion is meaningful.
+            assertThat(decision.obligations()).contains("sensitive-data-restrictions-apply");
+        }
+
+        private DecisionResponse allowedIn(Jurisdiction jurisdiction) {
+            PurposeDefinition purpose = Fixtures.purpose("US_MARKETING",
+                    Map.of(jurisdiction, LegalBasis.CONSENT), Set.of(Channel.EMAIL),
+                    ExpiryPolicy.NONE, null, FailureBehavior.FAIL_CLOSED,
+                    Set.of("CONTACT_BUSINESS"), false, false, false);
+
+            DecisionResponse decision = Fixtures.engine(
+                            Fixtures.fullCatalog().with(purpose),
+                            new Fixtures.Artefacts().with("US_MARKETING", ConsentStatus.GRANTED,
+                                    null))
+                    .evaluate(request("US_MARKETING", Channel.EMAIL, jurisdiction, NOW));
+
+            assertThat(decision.isAllowed())
+                    .withFailMessage("expected an allowance in %s but got %s", jurisdiction,
+                            decision.reason())
+                    .isTrue();
+            return decision;
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Who is asking, and who is receiving
+    // -------------------------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Caller and recipient — the two identities the request already carried")
+    class CallerAndRecipient {
+
+        @Test
+        @DisplayName("an unregistered application is denied even with consent on record")
+        void unregisteredApplicationIsDenied() {
+            // applicationId and vendorId travelled the whole way from the wire into
+            // DecisionRequest and were then dropped, while two denial reasons sat in the enum with
+            // nothing emitting either. A caller nobody registered is either an integration that
+            // was never reviewed or a credential being used somewhere it should not be.
+            DecisionResponse decision = engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withApplication("MKT_OUTBOUND_CALL", "APP_NOBODY_REGISTERED"));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.APPLICATION_NOT_AUTHORISED);
+        }
+
+        @Test
+        @DisplayName("a deactivated application is denied")
+        void deactivatedApplicationIsDenied() {
+            DecisionResponse decision = engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withApplication("MKT_OUTBOUND_CALL", Fixtures.APP_RETIRED));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.APPLICATION_NOT_AUTHORISED);
+        }
+
+        @Test
+        @DisplayName("an application belonging to another entity is denied")
+        void applicationFromAnotherEntityIsDenied() {
+            // The case a leaked credential produces. Matrix's BGV surface asking about a Denave
+            // subject is not a mistake that corrects itself, and until row-level security lands
+            // this gate is the only place it is visible.
+            DecisionResponse decision = engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withApplication("MKT_OUTBOUND_CALL", Fixtures.APP_OTHER_ENTITY));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.APPLICATION_NOT_AUTHORISED);
+            assertThat(decision.explanation()).contains("not authorised to act for this fiduciary");
+        }
+
+        @Test
+        @DisplayName("a surface scoped to another entity may act for it")
+        void scopedSharedSurfaceIsAllowed() {
+            // Athena BPO owns the dialer and places Denave's calls with it. Ownership and reach
+            // are different questions, and answering the second with the first would deny that
+            // surface every request it exists to make — which is the failure the previous
+            // ownership-only rule produced against the platform's own seed data.
+            assertThat(engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withApplication("MKT_OUTBOUND_CALL", Fixtures.APP_SHARED))
+                    .isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the registered application for this entity is allowed")
+        void registeredApplicationPasses() {
+            assertThat(engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withApplication("MKT_OUTBOUND_CALL", Fixtures.APP))
+                    .isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("no application id at all is not a violation")
+        void absentApplicationIsNotAViolation() {
+            // Deliberate, and the same judgement the capture validator makes. Plenty of
+            // server-side callers have no surface identity — a nightly CRM reconciliation is not a
+            // web form — and denying them would halt lawful processing to enforce a field nobody
+            // asked them for.
+            assertThat(engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(request("MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN, NOW))
+                    .isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a vendor not authorised for the purpose is denied")
+        void unauthorisedVendorIsDenied() {
+            // The gap this closes: the platform would answer ALLOW for data about to be handed to
+            // a processor whose agreement does not cover the purpose. The consent is real; the
+            // recipient is the problem.
+            DecisionResponse decision = engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withVendor("MKT_OUTBOUND_CALL", Fixtures.VENDOR_UNAUTHORISED));
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.reason()).isEqualTo(DenialReason.VENDOR_NOT_AUTHORISED);
+        }
+
+        @Test
+        @DisplayName("a vendor authorised for one purpose is not thereby authorised for another")
+        void vendorAuthorisationIsScopedPerPurpose() {
+            // Athena's dialer is engaged for outbound calling. Handing it the same records to
+            // service an existing account is a different processing operation under a different
+            // clause, and a registry that only knew "is this a known vendor" would wave it through.
+            assertThat(engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(withVendor("MKT_OUTBOUND_CALL", Fixtures.VENDOR))
+                    .isAllowed()).isTrue();
+
+            DecisionResponse other = Fixtures.engine(Fixtures.fullCatalog(),
+                            new Fixtures.Artefacts().with("SALES_RELATIONSHIP",
+                                    ConsentStatus.GRANTED, null, LegalBasis.INFERRED_CONSENT))
+                    .evaluate(withVendor("SALES_RELATIONSHIP", Fixtures.VENDOR));
+
+            assertThat(other.isAllowed()).isFalse();
+            assertThat(other.reason()).isEqualTo(DenialReason.VENDOR_NOT_AUTHORISED);
+        }
+
+        @Test
+        @DisplayName("no vendor id at all is not a violation")
+        void absentVendorIsNotAViolation() {
+            assertThat(engineWithGrant("MKT_OUTBOUND_CALL", null)
+                    .evaluate(request("MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN, NOW))
+                    .isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an unauthorised vendor does not rescue a subject who withdrew")
+        void theEarlierGatesStillWinWhereTheyApply() {
+            // Ordering assertion. Vendor authorisation sits above the consent record, so a request
+            // that fails both must name the vendor — otherwise a denial's reason would depend on
+            // which check happened to run first, and the reason is what a regulator reads.
+            DecisionResponse decision = engineWithStatus("MKT_OUTBOUND_CALL",
+                    ConsentStatus.WITHDRAWN)
+                    .evaluate(withVendor("MKT_OUTBOUND_CALL", Fixtures.VENDOR_UNAUTHORISED));
+
+            assertThat(decision.reason()).isEqualTo(DenialReason.VENDOR_NOT_AUTHORISED);
+        }
+
+        private DecisionRequest withApplication(String purposeCode, String applicationId) {
+            return new DecisionRequest(ENTITY, SUBJECT, purposeCode, Channel.VOICE_CALL,
+                    Jurisdiction.IN, applicationId, NOW, null, null, null, Map.of());
+        }
+
+        private DecisionRequest withVendor(String purposeCode, String vendorId) {
+            return new DecisionRequest(ENTITY, SUBJECT, purposeCode, Channel.VOICE_CALL,
+                    Jurisdiction.IN, Fixtures.APP, NOW, null, null, vendorId, Map.of());
         }
     }
 
@@ -393,7 +795,9 @@ class GoldenDecisionSuiteTest {
                     request("MKT_US_OUTREACH", Channel.EMAIL, Jurisdiction.US_CA, NOW));
 
             assertThat(decision.obligations()).contains(
-                    "provide-do-not-sell-or-share-link", "honour-global-privacy-control-signal");
+                    "provide-do-not-sell-or-share-link", // Renamed when the other eleven states arrived: the signal is not California's,
+                    // and naming it after GPC alone would date the obligation to one vendor's spec.
+                    "honour-universal-opt-out-signal");
         }
 
         @Test
@@ -517,7 +921,8 @@ class GoldenDecisionSuiteTest {
                 }
             };
             PolicyEngine engine = new PolicyEngine(broken, new Fixtures.Artefacts(),
-                    new Fixtures.Suppressions(), (e, s) -> true, s -> false, Fixtures.allModules(),
+                    new Fixtures.Suppressions(), (e, s) -> true, (e, s, at) -> false,
+                    Fixtures.applications(), Fixtures.vendors(), Fixtures.allModules(),
                     Fixtures.POLICY_VERSION);
 
             DecisionResponse decision = engine.evaluate(
@@ -544,7 +949,8 @@ class GoldenDecisionSuiteTest {
 
             PolicyEngine engine = new PolicyEngine(Fixtures.fullCatalog(),
                     new Fixtures.Artefacts().with("MKT_OUTBOUND_CALL", ConsentStatus.GRANTED, null),
-                    new Fixtures.Suppressions(), (e, s) -> true, s -> false,
+                    new Fixtures.Suppressions(), (e, s) -> true, (e, s, at) -> false,
+                    Fixtures.applications(), Fixtures.vendors(),
                     List.of(denies, reinstates), Fixtures.POLICY_VERSION);
 
             DecisionResponse decision = engine.evaluate(

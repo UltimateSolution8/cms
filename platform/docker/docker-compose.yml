@@ -92,8 +92,21 @@ services:
       DB_MIGRATION_URL: jdbc:postgresql://postgres:5432/uds_consent
       DB_MIGRATION_USER: uds_consent_owner
       DB_MIGRATION_PASSWORD: uds_consent_owner
+      # Passed through rather than defaulted here, so that bringing the stack up the way an
+      # operator would — with a real pepper and a real key pair in the environment — exercises the
+      # same path a deployment uses. Unset, the `local` profile's development pepper applies and
+      # the service generates an ephemeral signing key and warns about both, which is correct for
+      # a laptop and is not what a walkthrough should be proving.
+      IDENTIFIER_PEPPER: ${IDENTIFIER_PEPPER:-}
+      SNAPSHOT_KEY_ID: ${SNAPSHOT_KEY_ID:-dev-ephemeral}
+      SNAPSHOT_SIGNING_KEY: ${SNAPSHOT_SIGNING_KEY:-}
+      SNAPSHOT_VERIFICATION_KEY: ${SNAPSHOT_VERIFICATION_KEY:-}
     ports:
       - "${SERVICE_PORT:-8080}:8080"
+      # The actuator, on its own port. Published here because a laptop is where somebody first
+      # looks at /actuator/prometheus and /actuator/health/readiness; in the cluster this port is
+      # reachable from the scraper and the kubelet and from nothing else. See deploy/k8s.
+      - "${MANAGEMENT_PORT:-9090}:9090"
 
 volumes:
   postgres-data:

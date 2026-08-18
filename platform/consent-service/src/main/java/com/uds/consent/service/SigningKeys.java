@@ -1,32 +1,26 @@
 package com.uds.consent.service;
 
+import com.uds.consent.core.snapshot.SigningKeyProvider;
 import com.uds.consent.core.snapshot.SnapshotSigner;
-import com.uds.consent.service.config.PlatformProperties;
+import com.uds.consent.ledger.store.SigningKeyStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.security.KeyFactory;
-import java.security.KeyPair;
-import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Holds the Ed25519 key pair snapshots are signed with, and publishes the public half so that
- * SDKs can verify offline.
+ * Publishes the verification keys an SDK should trust, and signs with whichever key custody model
+ * is configured.
  *
- * <p>In production both halves come from the KMS. Both are required together, because the JDK's
- * Ed25519 private key encoding does not carry the public point and recovering it would mean
- * reimplementing scalar multiplication — exactly the kind of hand-rolled cryptography that has no
- * place in the component the whole offline enforcement story rests on.
- *
- * <p>Where neither is configured this generates an ephemeral pair and says so, loudly: every
- * snapshot issued before a restart stops verifying after it, which is tolerable on a laptop and
- * nowhere else.
+ * <p>The custody question — where the private half lives — is {@link SigningKeyProvider}'s, not
+ * this class's. This one owns what surrounds it: recording the public half so other instances and
+ * devices can verify what this one signs, and assembling the set of keys still worth trusting.
+ * Separating the two is what lets a KMS arrive as a bean rather than as a rewrite of the snapshot
+ * path.
  */
 @Component
 public class SigningKeys {
@@ -34,38 +28,35 @@ public class SigningKeys {
     private static final Logger log = LoggerFactory.getLogger(SigningKeys.class);
 
     private final SnapshotSigner signer;
-    private final PublicKey publicKey;
-    private final String keyId;
+    private final SigningKeyProvider keys;
+    private final SigningKeyStore registry;
 
-    public SigningKeys(PlatformProperties properties) {
-        PlatformProperties.Snapshot config = properties.getSnapshot();
-        this.keyId = config.getSigningKeyId();
+    public SigningKeys(SigningKeyProvider keys, SigningKeyStore registry) {
+        this.keys = keys;
+        this.registry = registry;
+        this.signer = new SnapshotSigner(keys);
+        publish();
+    }
 
-        boolean hasPrivate = notBlank(config.getSigningKeyBase64());
-        boolean hasPublic = notBlank(config.getVerificationKeyBase64());
-
-        if (!hasPrivate && !hasPublic) {
-            KeyPair pair = SnapshotSigner.generateKeyPair();
-            this.signer = new SnapshotSigner(pair.getPrivate(), keyId);
-            this.publicKey = pair.getPublic();
-            log.warn("no snapshot signing key configured; generated an ephemeral Ed25519 key with "
-                    + "id '{}'. Snapshots signed with it stop verifying when this process "
-                    + "restarts, and other instances will reject them. Configure "
-                    + "uds.consent.snapshot.signing-key-base64 and .verification-key-base64 from "
-                    + "the KMS for any shared environment.", keyId);
-            return;
+    /**
+     * Records this instance's public key so that other instances, and devices, can verify what it
+     * signs.
+     *
+     * <p>Best-effort by design. A registry write failing must not stop the platform starting: the
+     * key still works for this instance, and refusing to serve decisions because a metadata insert
+     * failed would trade a publication problem for an outage. The WARN is the signal, and the
+     * consequence — a device that cannot fetch this key from /v1/keys — is visible where it hurts
+     * rather than hidden behind a healthy-looking process.
+     */
+    private void publish() {
+        try {
+            registry.register(keys.keyId(), "Ed25519", publicKeyBase64());
+        } catch (RuntimeException e) {
+            log.warn("could not record snapshot signing key '{}' in the registry: {}. Snapshots "
+                    + "will still be signed and this instance will still verify them, but the key "
+                    + "may not appear at GET /v1/keys for devices or for other instances.",
+                    keys.keyId(), e.getMessage());
         }
-
-        if (hasPrivate != hasPublic) {
-            throw new IllegalStateException(
-                    "snapshot signing keys must be configured as a pair: set both "
-                            + "uds.consent.snapshot.signing-key-base64 (PKCS#8) and "
-                            + "uds.consent.snapshot.verification-key-base64 (X.509), or neither.");
-        }
-
-        this.signer = new SnapshotSigner(loadPrivateKey(config.getSigningKeyBase64()), keyId);
-        this.publicKey = loadPublicKey(config.getVerificationKeyBase64());
-        log.info("snapshot signing key '{}' loaded", keyId);
     }
 
     public SnapshotSigner signer() {
@@ -73,7 +64,7 @@ public class SigningKeys {
     }
 
     public String keyId() {
-        return keyId;
+        return keys.keyId();
     }
 
     /**
@@ -85,37 +76,30 @@ public class SigningKeys {
      * makes rotation a non-event.
      */
     public Map<String, PublicKey> verificationKeys() {
-        return Map.of(keyId, publicKey);
+        // This instance's own key first and unconditionally, so verification never depends on the
+        // database being reachable — the offline enforcement story cannot rest on a query.
+        Map<String, PublicKey> trusted = new LinkedHashMap<>();
+        trusted.put(keys.keyId(), keys.publicKey());
+
+        // Then everything else still trusted: keys held by sibling instances, and keys retired
+        // within the last snapshot lifetime. Without these, a snapshot signed by another replica
+        // is rejected by this one — which looks exactly like tampering and is not.
+        try {
+            for (SigningKeyStore.Key key : registry.trusted()) {
+                if (!trusted.containsKey(key.keyId())) {
+                    trusted.put(key.keyId(),
+                            EnvironmentSigningKeyProvider.loadPublicKey(key.publicKeyBase64()));
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("could not read the signing key registry; verifying against this instance's "
+                    + "key alone: {}", e.getMessage());
+        }
+        return Map.copyOf(trusted);
     }
 
     /** The public key in base64 X.509 form, for the key-publication endpoint. */
     public String publicKeyBase64() {
-        return Base64.getEncoder().encodeToString(publicKey.getEncoded());
-    }
-
-    private static boolean notBlank(String value) {
-        return value != null && !value.isBlank();
-    }
-
-    private static PrivateKey loadPrivateKey(String base64Pkcs8) {
-        try {
-            byte[] decoded = Base64.getDecoder().decode(base64Pkcs8.trim());
-            return KeyFactory.getInstance("Ed25519")
-                    .generatePrivate(new PKCS8EncodedKeySpec(decoded));
-        } catch (Exception e) {
-            throw new IllegalStateException(
-                    "could not load the snapshot signing key; expected base64 PKCS#8 Ed25519", e);
-        }
-    }
-
-    private static PublicKey loadPublicKey(String base64X509) {
-        try {
-            byte[] decoded = Base64.getDecoder().decode(base64X509.trim());
-            return KeyFactory.getInstance("Ed25519")
-                    .generatePublic(new X509EncodedKeySpec(decoded));
-        } catch (Exception e) {
-            throw new IllegalStateException(
-                    "could not load the snapshot verification key; expected base64 X.509 Ed25519", e);
-        }
+        return Base64.getEncoder().encodeToString(keys.publicKey().getEncoded());
     }
 }

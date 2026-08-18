@@ -4,11 +4,13 @@ import com.uds.consent.core.model.IdentifierType;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.RightsRequestStatus;
 import com.uds.consent.core.model.RightsRequestType;
+import com.uds.consent.core.model.RightsVerificationMethod;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.service.RightsService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,10 +20,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Filing and tracking rights requests.
@@ -64,7 +68,15 @@ public class RightsController {
                 request.jurisdiction() == null ? Jurisdiction.IN : request.jurisdiction(),
                 request.receivedAt(),
                 request.details(),
-                actorOf(authentication)));
+                actorOf(authentication),
+                // The weaker reading is the default. An operator who did establish identity says
+                // how and gets OPERATOR_ASSERTED; an empty field is recorded as UNVERIFIED rather
+                // than left to look like every other request. Nothing is refused either way — see
+                // RightsVerificationMethod, which is a label and not a gate.
+                request.verifiedAs() == null || request.verifiedAs().isBlank()
+                        ? RightsVerificationMethod.UNVERIFIED
+                        : RightsVerificationMethod.OPERATOR_ASSERTED,
+                request.verifiedAs()));
     }
 
     /** One request, including how long is left on it. */
@@ -131,17 +143,100 @@ public class RightsController {
                                                   @Valid @RequestBody TransitionRequest request,
                                                   Authentication authentication) {
         return rights.transition(requestId, request.status(), request.assignedTo(),
-                request.resolution(), actorOf(authentication));
+                request.resolution(), administratorOf(authentication));
     }
 
+    /**
+     * Records what one downstream system did about a request.
+     *
+     * <p>The platform does not perform the act — nothing here can reach DenCRM, the HRMS or the
+     * BGV workflow, and a connector written against a system nobody on this side can call would be
+     * worse than none, because it would look like fulfilment. What this records is a named person's
+     * attestation against a named system, with a reference a reviewer can follow somewhere other
+     * than back into this platform.
+     *
+     * <p>{@code evidenceRef} is required for exactly that reason. "We erased it" with nothing
+     * behind it is the same unevidenced assertion the resolution field already was, and the point
+     * of this endpoint is to stop that being sufficient.
+     */
+    @PostMapping("/{requestId}/fulfilment")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> recordFulfilment(@PathVariable String requestId,
+                                                @Valid @RequestBody FulfilmentRequest request,
+                                                Authentication authentication) {
+        long actionId = rights.recordFulfilment(requestId, request.systemCode(),
+                request.actionType(), request.status(), request.evidenceRef(), request.detail(),
+                administratorOf(authentication));
+        return Map.of("actionId", actionId,
+                "outstanding", rights.outstandingFulfilment(requestId));
+    }
+
+    /** What each system did, and which mandatory ones still have not. */
+    @GetMapping("/{requestId}/fulfilment")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Map<String, Object> fulfilment(@PathVariable String requestId) {
+        return Map.of(
+                "actions", rights.fulfilmentActions(requestId),
+                "outstanding", rights.outstandingFulfilment(requestId));
+    }
+
+    /**
+     * @param systemCode  the downstream system: DENCRM, HRMS, BGV
+     * @param actionType  ERASED, EXPORTED, CORRECTED, NOTHING_HELD, REFUSED
+     * @param status      COMPLETED or FAILED. Only COMPLETED satisfies a mandatory target — a
+     *                    failed attempt is worth recording precisely because it must not count
+     * @param evidenceRef a ticket id, an export hash, a deletion job reference. Required
+     */
+    public record FulfilmentRequest(@NotBlank String systemCode,
+                                    @NotBlank String actionType,
+                                    @NotBlank String status,
+                                    @NotBlank String evidenceRef,
+                                    String detail) {
+    }
+
+    /**
+     * The caller, for routes a machine holds.
+     *
+     * <p>Deliberately the credential and not the {@code X-UDS-Actor} header. A dialer scrubbing a
+     * campaign list, a website recording an opt-out and a CRM asserting provenance are systems,
+     * not people, and there is no human behind the call to name. Recording the credential is the
+     * accurate answer — and honouring a header on these routes would be worse than useless, since
+     * it would let any capture surface write an arbitrary name into evidence about who did
+     * something no person did.
+     *
+     * <p>The administrative routes in this controller use {@link #administratorOf} instead, which
+     * requires the header. The split follows the authorisation model rather than the file: this
+     * class serves both machine and console callers, and attribution should mean different things
+     * for each.
+     */
     private static String actorOf(Authentication authentication) {
         return authentication == null ? "anonymous" : authentication.getName();
     }
 
     /**
+     * The person taking an administrative action, refusing when the caller did not say who.
+     *
+     * <p>Used on the ADMIN-only routes here. {@code compliance-console} is one credential held by
+     * a team, so an append-only audit row naming it is permanently ambiguous about who authorised
+     * the action — which is the one question an audit trail exists to answer.
+     */
+    private static String administratorOf(Authentication authentication) {
+        return Actor.required(authentication).actorId();
+    }
+
+    /**
      * @param receivedAt when the principal asked, if that differs from when this was keyed in.
      *                   The clock runs from their act; a form filled in three days late does not
-     *                   buy the group three extra days
+     *                   buy the group three extra days. Bounded in both directions — a value in
+     *                   the future is refused with 400, because it would move the deadline
+     *                   outward, and one older than {@code uds.consent.rights.max-backdate} is
+     *                   refused because it would file a request already in breach
+     * @param verifiedAs how the operator established that the person filing is the principal: a
+     *                   call-back to a number already on file, an employee ID checked at a desk, a
+     *                   document reference. Optional, and its absence is recorded as
+     *                   {@code UNVERIFIED} rather than passed over — the request is accepted
+     *                   either way, and the row says which it was
      */
     public record FileRequest(
             @NotBlank String entityId,
@@ -151,7 +246,8 @@ public class RightsController {
             @NotNull RightsRequestType type,
             Jurisdiction jurisdiction,
             Instant receivedAt,
-            String details) {
+            String details,
+            String verifiedAs) {
     }
 
     public record TransitionRequest(

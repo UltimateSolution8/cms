@@ -58,6 +58,43 @@ public class SuppressionStore {
         this.jdbc = JdbcClient.create(dataSource);
     }
 
+    /**
+     * When this subject last asked not to be contacted on a channel, in force or not.
+     *
+     * <p>Deliberately ignores {@code effective_to} and scope. Those decide whether the platform
+     * may contact somebody now; this answers a different question — how long ago they said no —
+     * and TRAI's ninety-day cooling-off runs from the saying, not from the suppression's
+     * remaining life. An opt-out scoped to one campaign, or one that has since lapsed, stops
+     * suppressing while the cooling-off it started is still running, and that is precisely the
+     * case the rule exists for.
+     *
+     * <p>Statutory registry entries are excluded. A national preference registration is a standing
+     * state rather than an act of opting out of this group's messaging, and treating a decades-old
+     * NCPR listing as a fresh opt-out would put every registered number permanently inside a
+     * cooling-off — denying with the wrong reason where the registry already denies with the right
+     * one.
+     */
+    public Optional<Instant> lastOptOutAt(String entityId, String subjectId, Channel channel) {
+        return jdbc.sql("""
+                        select max(effective_from) from suppression_entry
+                         where subject_id = :subjectId
+                           and channel = :channel
+                           and (entity_id = :entityId or entity_id is null)
+                        -- Only the sources that represent the subscriber themselves saying no.
+                        -- CLIENT_SUPPLIED, MANUAL and DELIVERY_FAILURE are decisions taken about
+                        -- a person rather than by them, and a bounced email is not an opt-out —
+                        -- starting a cooling-off from any of those would bar re-solicitation on
+                        -- the strength of something the subscriber never did.
+                           and source in ('INBOUND_OPT_OUT', 'AGENT_RECORDED')
+                        """)
+                .param("subjectId", subjectId)
+                .param("channel", channel.name())
+                .param("entityId", entityId)
+                .query(Timestamp.class)
+                .optional()
+                .map(Timestamp::toInstant);
+    }
+
     /** The strongest active suppression against a known subject, if any. */
     public Optional<Hit> findForSubject(String entityId, String subjectId, Channel channel,
                                         String clientId, String campaignId, Instant at) {

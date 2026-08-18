@@ -15,6 +15,20 @@ public enum SuppressionSource {
     /** Singapore: PDPC Do Not Call Registry. Checked before every telemarketing contact. */
     DNC_SINGAPORE(true),
 
+    /**
+     * United States: a universal opt-out signal — Global Privacy Control or equivalent.
+     *
+     * <p>Statutory, because in the twelve states that mandate it the signal <em>is</em> a valid
+     * opt-out request and honouring it is not discretionary. Recorded through the same suppression
+     * machinery as a preference register, which is the right shape: it arrives from outside, it
+     * outranks a consent record, and it applies until the subject says otherwise.
+     *
+     * <p>Until this existed {@code CcpaModule} emitted an obligation to honour a GPC signal while
+     * nothing in the platform could receive one — an instruction to respect something it had no
+     * way to record, which is the wrong way round.
+     */
+    UNIVERSAL_OPT_OUT(true),
+
     /** United Kingdom: Telephone Preference Service. */
     TPS_UK(true),
 

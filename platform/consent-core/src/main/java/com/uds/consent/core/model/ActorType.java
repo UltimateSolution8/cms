@@ -26,5 +26,19 @@ public enum ActorType {
     IMPORT,
 
     /** Action taken in response to a direction from a regulator or the Data Protection Board. */
-    REGULATOR
+    REGULATOR,
+
+    /**
+     * A Consent Manager registered with the Board, relaying what the principal did there.
+     *
+     * <p>A first-class actor rather than an attribute on the event, because the provenance of a
+     * consent is precisely what the evidence plane exists to record: "the principal did this at
+     * their Consent Manager and we were told" is a different fact from "the principal did this on
+     * our own form", and only one of them can be evidenced by anything UDS holds. An attribute map
+     * is where facts go to become unqueryable.
+     *
+     * <p>The actor id carries the Board registration number, so an auditor can go from an event to
+     * the register entry that made the relay legitimate. See {@code V14__consent_manager.sql}.
+     */
+    CONSENT_MANAGER
 }

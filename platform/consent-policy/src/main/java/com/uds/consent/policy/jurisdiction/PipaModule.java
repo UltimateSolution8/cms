@@ -7,6 +7,7 @@ import com.uds.consent.core.model.LegalBasis;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.policy.capture.CaptureSubmission;
 import com.uds.consent.policy.capture.CaptureViolation;
+import com.uds.consent.policy.port.PolicyPorts;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +29,20 @@ import java.util.Map;
  */
 public class PipaModule implements JurisdictionModule {
 
+    private final PolicyPorts.ReconfirmationStatus reconfirmation;
+
+    public PipaModule() {
+        this(PolicyPorts.ReconfirmationStatus.none());
+    }
+
+    /**
+     * @param reconfirmation the Art. 62-3 queue. Injected rather than looked up so that the golden
+     *                       decision suite can exercise the Korean rules with no database at all
+     */
+    public PipaModule(PolicyPorts.ReconfirmationStatus reconfirmation) {
+        this.reconfirmation = reconfirmation;
+    }
+
     @Override
     public Jurisdiction jurisdiction() {
         return Jurisdiction.KR;
@@ -39,9 +54,31 @@ public class PipaModule implements JurisdictionModule {
         if (!decision.isAllowed() || basis != LegalBasis.CONSENT) {
             return decision;
         }
-        return JurisdictionModule.withObligations(decision,
+
+        List<String> obligations = new ArrayList<>(List.of(
                 "consent-must-be-itemised-per-purpose",
-                "provide-korean-language-notice");
+                "provide-korean-language-notice"));
+
+        // Enforcement Decree of the Information and Communications Network Act, Art. 62-3: consent
+        // to receive advertising information must be re-confirmed every two years from the date it
+        // was given, disclosing the sender's name, the fact and date of consent, and how to
+        // maintain or withdraw it.
+        //
+        // ALLOW is deliberate and is the judgement most likely to be "corrected" by someone who
+        // reads the obligation and assumes an overdue consent must be a dead one. It is not. The
+        // Decree prescribes the interval and the disclosure and is silent on the effect of a
+        // recipient who never answers; industry practice treats silence as maintaining consent,
+        // and practice is not text. Denying here would enforce a rule nobody can cite, would
+        // suppress contact that is lawful on any published reading, and would do it on this
+        // platform's own authority. Surfacing it as an obligation puts the position in front of
+        // the caller and leaves the decision where it belongs. See REGULATORY_HANDOFF.md, which
+        // carries the counsel question this defers to.
+        if (reconfirmation.isOverdue(request.entityId(), request.subjectId(), purpose.code(),
+                request.at())) {
+            obligations.add("reconfirmation-overdue");
+        }
+
+        return JurisdictionModule.withObligations(decision, obligations.toArray(String[]::new));
     }
 
     @Override

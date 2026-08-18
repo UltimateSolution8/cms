@@ -20,4 +20,23 @@ public interface EventPublisher {
      *                          and retries, which is why the outbox exists
      */
     void publish(String topic, String key, String payload);
+
+    /**
+     * Publishes one message, with the outbox row it came from.
+     *
+     * <p>A default that discards the extra arguments, so the log and Kafka publishers are
+     * unchanged: a broker does not care which row a message came from, and threading an id through
+     * them to satisfy one implementation would be the wrong direction of coupling.
+     *
+     * <p>The webhook publisher does care. It writes a delivery record per attempt, and "which
+     * message, on which try" is the whole content of that record — an HTTP 200 with no idea what
+     * it acknowledged cannot answer "did the withdrawal reach DenCRM".
+     *
+     * @param outboxId the row being drained
+     * @param attempt  how many times it has already been tried, so the record shows a message that
+     *                 succeeded on the third go for what it is: one that failed twice
+     */
+    default void publish(String topic, String key, String payload, long outboxId, int attempt) {
+        publish(topic, key, payload);
+    }
 }

@@ -3,6 +3,8 @@ package com.uds.consent.policy.capture;
 import com.uds.consent.core.model.ActorType;
 import com.uds.consent.core.model.CaptureMethod;
 import com.uds.consent.core.model.Channel;
+import com.uds.consent.core.model.GuardianVerification;
+import com.uds.consent.core.model.GuardianVerificationMethod;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.policy.Fixtures;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The door the ledger sits behind.
@@ -30,7 +33,8 @@ class CaptureValidatorTest {
     private static final Instant NOW = Fixtures.NOW;
 
     private final CaptureValidator validator =
-            new CaptureValidator(Fixtures.fullCatalog(), Fixtures.applications(), Fixtures.allModules());
+            new CaptureValidator(Fixtures.fullCatalog(), Fixtures.applications(),
+                    Fixtures.notices(), Fixtures.allModules());
 
     // -------------------------------------------------------------------------------------------
     // DPDP Rule 8 — dark patterns
@@ -194,7 +198,7 @@ class CaptureValidatorTest {
                     java.util.Set.of(Channel.WEB), com.uds.consent.core.model.ExpiryPolicy.NONE,
                     null, com.uds.consent.core.model.FailureBehavior.FAIL_CLOSED,
                     java.util.Set.of("CONTACT_PERSONAL"), false, true, false)),
-            Fixtures.applications(), Fixtures.allModules());
+            Fixtures.applications(), Fixtures.notices(), Fixtures.allModules());
 
     @Test
     @DisplayName("a child's consent without verified parental action is rejected")
@@ -206,8 +210,13 @@ class CaptureValidatorTest {
                         "WEB_PROGRAMME_SIGNUP")),
                 true, NOW, "idem-6", null, Map.of("subject.isChild", "true"));
 
+        // Two findings, not one. The child acted for themselves, and nothing records that any
+        // guardian was checked — the second is true of this submission independently of the first,
+        // and a surface fixing only the actor type would still be refused.
         assertThat(codes(childSafeValidator.validate(byChild)))
-                .containsExactly(CaptureViolation.Code.PARENTAL_CONSENT_REQUIRED);
+                .containsExactlyInAnyOrder(
+                        CaptureViolation.Code.PARENTAL_CONSENT_REQUIRED,
+                        CaptureViolation.Code.GUARDIAN_VERIFICATION_NOT_EVIDENCED);
     }
 
     @Test
@@ -218,9 +227,93 @@ class CaptureValidatorTest {
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
                         "WEB_PROGRAMME_SIGNUP")),
-                true, NOW, "idem-10", null, Map.of("subject.isChild", "true"));
+                true, NOW, "idem-10", null, Map.of("subject.isChild", "true"),
+                digilockerVerification());
 
         assertThat(childSafeValidator.validate(byGuardian)).isEmpty();
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // DPDP Rule 10 — the diligence, not just the consent
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a parental consent claim with no record of the diligence is refused")
+    void parentalConsentMustCarryItsVerification() {
+        // The gap this closes. Every field below is individually well-formed and internally
+        // consistent: a child, a guardian actor, PARENTAL_VERIFIED as the method, a purpose open
+        // to children. Before Rule 10 was enforced here this was accepted, and what it recorded
+        // was the capture surface's own claim that it had done the checking. Rule 10 puts the duty
+        // on the fiduciary, so the platform will not take the surface's word for it.
+        CaptureSubmission unevidenced = new CaptureSubmission("DENAVE_IN", "subject-1",
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
+                ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
+                List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
+                        "WEB_PROGRAMME_SIGNUP")),
+                true, NOW, "idem-r10-1", null, Map.of("subject.isChild", "true"));
+
+        assertThat(codes(childSafeValidator.validate(unevidenced)))
+                .containsExactly(CaptureViolation.Code.GUARDIAN_VERIFICATION_NOT_EVIDENCED);
+    }
+
+    @Test
+    @DisplayName("a guardian actor is a parental consent claim even where no child was declared")
+    void aGuardianActorAloneTriggersTheRequirement() {
+        // A surface that names a guardian and forgets the age attribute has a bug. What must not
+        // follow from that bug is an unevidenced parental consent slipping through because the
+        // condition was written to key off the age flag alone.
+        CaptureSubmission byGuardian = new CaptureSubmission("DENAVE_IN", "subject-1",
+                Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
+                ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
+                List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
+                        "WEB_PROGRAMME_SIGNUP")),
+                true, NOW, "idem-r10-2", null, Map.of());
+
+        assertThat(codes(childSafeValidator.validate(byGuardian)))
+                .contains(CaptureViolation.Code.GUARDIAN_VERIFICATION_NOT_EVIDENCED);
+    }
+
+    @Test
+    @DisplayName("either of Rule 10's two routes satisfies the requirement")
+    void bothVerificationRoutesAreAccepted() {
+        // Rule 10 offers two: identity and age the fiduciary already reliably holds, or a virtual
+        // token from a Digital Locker provider. The platform accepts either and records which,
+        // because they carry different evidentiary weight and a boolean would lose the difference.
+        for (GuardianVerificationMethod method : List.of(
+                GuardianVerificationMethod.EXISTING_VERIFIED_ACCOUNT,
+                GuardianVerificationMethod.DIGILOCKER_VIRTUAL_TOKEN)) {
+
+            CaptureSubmission byGuardian = new CaptureSubmission("DENAVE_IN", "subject-1",
+                    Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP,
+                    CaptureMethod.PARENTAL_VERIFIED, ActorType.PARENT_GUARDIAN, "guardian-9",
+                    "NOTICE_TEST", 1,
+                    List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(
+                            "WEB_PROGRAMME_SIGNUP")),
+                    true, NOW, "idem-r10-" + method, null, Map.of("subject.isChild", "true"),
+                    new GuardianVerification(method, "hash-of-whatever-was-checked",
+                            NOW.minusSeconds(86_400), "denave-web"));
+
+            assertThat(childSafeValidator.validate(byGuardian))
+                    .as("route %s should satisfy Rule 10", method)
+                    .isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("a verification block with nothing behind it cannot be constructed")
+    void aMethodWithNoReferenceIsNotEvidence() {
+        // Enforced in the model rather than the validator, so there is no path by which a
+        // half-filled block reaches a ledger event and looks like a completed check. The whole
+        // point of the record is the reference; a method on its own is the assertion it replaced.
+        assertThatThrownBy(() -> new GuardianVerification(
+                GuardianVerificationMethod.DIGILOCKER_VIRTUAL_TOKEN, "  ", NOW, "denave-web"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reference");
+    }
+
+    private static GuardianVerification digilockerVerification() {
+        return new GuardianVerification(GuardianVerificationMethod.DIGILOCKER_VIRTUAL_TOKEN,
+                "hash-of-virtual-token", NOW.minusSeconds(3_600), "denave-web");
     }
 
     @Test
@@ -232,7 +325,8 @@ class CaptureValidatorTest {
                 Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
-                true, NOW, "idem-7", null, Map.of("subject.isChild", "true"));
+                true, NOW, "idem-7", null, Map.of("subject.isChild", "true"),
+                digilockerVerification());
 
         assertThat(codes(validator.validate(byGuardian)))
                 .contains(CaptureViolation.Code.CHILD_PURPOSE_NOT_PERMITTED);
@@ -247,9 +341,47 @@ class CaptureValidatorTest {
                 Jurisdiction.IN, "en", Channel.WEB, Fixtures.APP, CaptureMethod.PARENTAL_VERIFIED,
                 ActorType.PARENT_GUARDIAN, "guardian-9", "NOTICE_TEST", 1,
                 List.of(CaptureSubmission.PurposeChoice.declined("WEB_ADVERTISING")),
-                true, NOW, "idem-8", null, Map.of("subject.isChild", "true"));
+                true, NOW, "idem-8", null, Map.of("subject.isChild", "true"),
+                digilockerVerification());
 
         assertThat(validator.validate(byGuardian)).isEmpty();
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Consent relayed by a Consent Manager (DPDP Rule 4)
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("consent relayed by a Consent Manager is valid consent")
+    void aRelayedGrantIsAffirmative() {
+        // The judgement this pins. The principal took a clear affirmative action; they took it at
+        // their Consent Manager, which is the mechanism Rule 4 exists to provide. A validator that
+        // rejected it would be refusing the statutory channel itself — and the failure would look
+        // like an integration bug rather than a policy decision, which is exactly why it is stated
+        // here rather than left to be inferred from an enum flag.
+        assertThat(validator.validate(submission(Jurisdiction.IN, Channel.WEB,
+                CaptureMethod.RELAYED_BY_CONSENT_MANAGER,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING"))))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("a relay is held to every other rule, not waved through for being statutory")
+    void aRelayEarnsNoExemptions() {
+        // The temptation is to accept whatever a registered Consent Manager sends. But validity
+        // under s.6 does not depend on how the consent arrived, and a fiduciary that recorded an
+        // invalid consent because an intermediary relayed it would be holding evidence against
+        // itself — pre-ticked at the Consent Manager is still pre-ticked.
+        List<CaptureViolation> violations = validator.validate(submission(Jurisdiction.IN,
+                Channel.WEB, CaptureMethod.RELAYED_BY_CONSENT_MANAGER,
+                new CaptureSubmission.PurposeChoice("WEB_ADVERTISING", true, true, true)));
+
+        assertThat(codes(violations)).contains(CaptureViolation.Code.PRE_SELECTED_OPTION);
+
+        assertThat(codes(validator.validate(submission(Jurisdiction.IN, null,
+                CaptureMethod.RELAYED_BY_CONSENT_MANAGER,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("HR_EMPLOYMENT_ADMIN")))))
+                .contains(CaptureViolation.Code.CONSENT_NOT_THE_BASIS);
     }
 
     // -------------------------------------------------------------------------------------------
@@ -384,6 +516,64 @@ class CaptureValidatorTest {
     }
 
     // -------------------------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------------------------
+    // Notice integrity — the reference must point at something real
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a notice version that was never published is rejected")
+    void aCitationOfNothingIsRefused() {
+        // The gap this closes. NOTICE_VERSION_NOT_RECORDED only ever tested that the field was
+        // present; a capture citing version 99 of a notice published to version 1 sailed through,
+        // producing a record that looks like sound evidence from every angle available afterwards.
+        // The failure surfaces years later, when somebody asks to see what the person read.
+        assertThat(codes(validator.validate(citing(Fixtures.NOTICE, 99, "en"))))
+                .contains(CaptureViolation.Code.NOTICE_VERSION_UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("a notice id that does not exist at all is rejected")
+    void anUnknownNoticeIsRefused() {
+        assertThat(codes(validator.validate(citing("NOTICE_NEVER_PUBLISHED", 1, "en"))))
+                .contains(CaptureViolation.Code.NOTICE_VERSION_UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("a language the notice does not exist in is rejected")
+    void aNoticeTheSubjectCouldNotReadIsRefused() {
+        // Separate code from the one above, because the remediation is different: this is usually
+        // a translation-procurement gap rather than a bug, and it is answered with a purchase
+        // order rather than by paging an engineer.
+        assertThat(codes(validator.validate(citing(Fixtures.NOTICE, 1, "brx"))))
+                .contains(CaptureViolation.Code.NOTICE_LANGUAGE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("an unknown version does not also report a missing translation")
+    void oneFailureAtATime() {
+        // Reporting both would send the integrator after the wrong problem — they would go looking
+        // for a translation of a version that does not exist.
+        assertThat(codes(validator.validate(citing(Fixtures.NOTICE, 99, "brx"))))
+                .contains(CaptureViolation.Code.NOTICE_VERSION_UNKNOWN)
+                .doesNotContain(CaptureViolation.Code.NOTICE_LANGUAGE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("a real version in a real language passes")
+    void aValidCitationPasses() {
+        assertThat(codes(validator.validate(citing(Fixtures.NOTICE, 1, "hi"))))
+                .doesNotContain(CaptureViolation.Code.NOTICE_VERSION_UNKNOWN,
+                        CaptureViolation.Code.NOTICE_LANGUAGE_UNAVAILABLE);
+    }
+
+    private static CaptureSubmission citing(String noticeId, int version, String languageTag) {
+        return new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.IN, languageTag,
+                Channel.WEB, Fixtures.APP, CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT,
+                "subject-1", noticeId, version,
+                List.of(CaptureSubmission.PurposeChoice.acceptedSeparately("WEB_ADVERTISING")),
+                true, NOW, "idem-" + System.nanoTime(), "evidence://form/1", Map.of());
+    }
 
     private static CaptureSubmission fromApplication(String applicationId) {
         return new CaptureSubmission("DENAVE_IN", "subject-1", Jurisdiction.IN, "en", Channel.WEB,

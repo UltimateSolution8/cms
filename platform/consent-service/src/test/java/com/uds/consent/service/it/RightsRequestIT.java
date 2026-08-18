@@ -4,6 +4,7 @@ import com.uds.consent.core.model.IdentifierType;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.RightsRequestStatus;
 import com.uds.consent.core.model.RightsRequestType;
+import com.uds.consent.core.model.RightsVerificationMethod;
 import com.uds.consent.ledger.store.AdminAuditStore;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.service.RightsService;
@@ -11,10 +12,20 @@ import com.uds.consent.service.sweeper.RightsSlaSweeper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +57,12 @@ class RightsRequestIT extends PostgresIntegrationTest {
 
     @Autowired
     private AdminAuditStore audit;
+
+    @Autowired
+    private TestRestTemplate rest;
+
+    @Autowired
+    private com.uds.consent.service.config.PlatformProperties properties;
 
     @Test
     @DisplayName("the deadline differs by jurisdiction, and the working is recorded with it")
@@ -207,10 +224,128 @@ class RightsRequestIT extends PostgresIntegrationTest {
 
         RightsRequestStore.Request request = rights.intake(new RightsService.Intake(
                 ENTITY, null, IdentifierType.PHONE, phone, RightsRequestType.ACCESS,
-                Jurisdiction.IN, Instant.now(), "Emailed the DPO", "compliance-console"));
+                Jurisdiction.IN, Instant.now(), "Emailed the DPO", "compliance-console",
+                RightsVerificationMethod.UNVERIFIED, null));
 
         assertThat(request.subjectId()).isNotBlank().doesNotContain(phone);
         assertThat(rights.forSubject(ENTITY, request.subjectId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a receivedAt in the future is refused, because it would move the deadline outward")
+    void aFutureStartInstantIsRefused() {
+        // The whole point of the bound. received_at is the input to the statutory clock, and until
+        // this refusal existed it was whatever the caller said it was — so a request answered late
+        // could be made to look timely by a value typed into a form, and in any Rule 14(3) dispute
+        // the group's own record would be evidence offered by the party the dispute is with.
+        Instant tomorrow = Instant.now().plus(1, ChronoUnit.DAYS);
+
+        assertThatThrownBy(() -> file(RightsRequestType.ACCESS, Jurisdiction.IN, tomorrow))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("in the future");
+
+        // Ordinary clock skew is still absorbed silently, which is why the bound is a window and
+        // not a comparison against now(). A tablet a minute ahead is a wrong clock, not a claim.
+        RightsRequestStore.Request skewed = file(RightsRequestType.ACCESS, Jurisdiction.IN,
+                Instant.now().plusSeconds(60));
+        assertThat(skewed.requestId()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("a receivedAt beyond the backdate bound is refused, because it would file a breach")
+    void aFarBackdatedStartInstantIsRefused() {
+        // The mirror of the test above, and the direction somebody inside would use. An instant
+        // far enough in the past files a request that is already past its deadline on the day it
+        // arrives — a statutory breach written into the group's own record without one having
+        // happened. The property asserted is that no request exists afterwards, not merely that
+        // something was thrown.
+        long before = store.summarise(ENTITY, Instant.now()).stream()
+                .mapToLong(RightsRequestStore.TypeSummary::total).sum();
+
+        // The bound is the *bound value*, not the Java field default. This profile sets 120 days
+        // where the shipped default is 90, so a mis-keyed property would leave 90 in place and
+        // fail here — a test asserting only that the property exists would pass either way, which
+        // is how otel.exporter.otlp.endpoint got shipped pointing at nothing for a whole phase.
+        assertThat(properties.getRights().getMaxBackdate()).isEqualTo(Duration.ofDays(120));
+
+        assertThatThrownBy(() -> file(RightsRequestType.ACCESS, Jurisdiction.IN,
+                Instant.now().minus(200, ChronoUnit.DAYS)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("already past its deadline");
+
+        assertThat(store.summarise(ENTITY, Instant.now()).stream()
+                .mapToLong(RightsRequestStore.TypeSummary::total).sum())
+                .withFailMessage("a refused backdate still created a request")
+                .isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("a request nobody verified says so, rather than looking like every other one")
+    void anUnverifiedRequestIsLabelledAsOne() {
+        // Silence is not read as diligence. The label refuses nothing — the request is filed, the
+        // clock runs, it enters the queue — and what it changes is that a reviewer can tell the
+        // difference between a start instant somebody established and one nobody did.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        assertThat(request.verification()).isEqualTo(RightsVerificationMethod.UNVERIFIED);
+        assertThat(request.verifiedAt()).isNull();
+        assertThat(request.status().isOpen()).isTrue();
+        assertThat(request.dueAt()).isAfter(request.receivedAt());
+    }
+
+    @Test
+    @DisplayName("an operator who established identity says how, and the audit row carries it")
+    void anOperatorAttestationIsRecorded() {
+        RightsRequestStore.Request request = rights.intake(new RightsService.Intake(
+                ENTITY, "it-rights-" + UUID.randomUUID(), null, null, RightsRequestType.ERASURE,
+                Jurisdiction.IN, Instant.now(), "filed at the service desk", "compliance-console",
+                RightsVerificationMethod.OPERATOR_ASSERTED,
+                "Called back the mobile already on file and confirmed the last four of the PAN"));
+
+        assertThat(request.verification()).isEqualTo(RightsVerificationMethod.OPERATOR_ASSERTED);
+        assertThat(request.verifiedAt()).isNotNull();
+        assertThat(request.verificationDetail()).contains("Called back");
+
+        // And on the append-only trail, not only on the mutable request row. "When did the clock
+        // start and what did that rest on" is a question an audit asks years later, by which time
+        // the request row has been transitioned several times.
+        assertThat(audit.recent(ENTITY, 200))
+                .filteredOn(entry -> "RIGHTS_REQUEST_RECEIVED".equals(entry.action())
+                        && request.requestId().equals(entry.targetId()))
+                .singleElement()
+                .satisfies(entry -> assertThat(entry.detailJson())
+                        .contains("OPERATOR_ASSERTED"));
+    }
+
+    @Test
+    @DisplayName("a row written without the column reads UNVERIFIED, never as though it were checked")
+    void theMigrationDefaultClaimsNothing() throws Exception {
+        // Every request that existed before V30 was filed through the administrative route with
+        // nobody recording a check. A default of PORTAL_TOKEN would claim a verification that never
+        // happened and OPERATOR_ASSERTED would claim an assurance nobody gave — either would be a
+        // false statement written into the evidence plane by a migration, which is the worst place
+        // to put one. Exercised by writing a row the way the pre-V30 code did, as the owner, so
+        // this fails if anybody later "tidies" the default.
+        String requestId = "RR-pre-v30-" + UUID.randomUUID();
+        try (Connection owner = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement statement = owner.createStatement()) {
+
+            statement.executeUpdate("""
+                    insert into rights_request (request_id, entity_id, subject_id, request_type,
+                                                jurisdiction, received_at, due_at)
+                    values ('%s', '%s', 'it-pre-v30', 'ACCESS', 'IN', now(), now() + interval '30 days')
+                    """.formatted(requestId, ENTITY));
+
+            try (ResultSet rs = statement.executeQuery(
+                    "select verification_method, verified_at from rights_request "
+                            + "where request_id = '" + requestId + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("verification_method")).isEqualTo("UNVERIFIED");
+                assertThat(rs.getTimestamp("verified_at")).isNull();
+            }
+        }
     }
 
     @Test
@@ -229,12 +364,104 @@ class RightsRequestIT extends PostgresIntegrationTest {
         assertThat(second.dueAt()).isEqualTo(request.dueAt());
     }
 
+    @Test
+    @DisplayName("a request cannot bounce backwards, and the refusal names the moves that are legal")
+    void theStatusesFormAStateMachine() {
+        // Before this, the only rules were "the request must be open" and "closing needs a
+        // resolution". Everything else was legal: RECEIVED → AWAITING_SUBJECT → RECEIVED →
+        // AWAITING_SUBJECT indefinitely, each bounce resetting nothing, the statutory clock
+        // running throughout, and the queue reading as active work the whole time. That is not a
+        // hypothetical shape of abuse — it is what a console with a status dropdown produces when
+        // somebody is trying to make a hard request look like it is moving.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ERASURE, Jurisdiction.IN, Instant.now());
+
+        rights.transition(request.requestId(), RightsRequestStatus.IN_PROGRESS, "priya", null,
+                "compliance-console");
+
+        assertThatThrownBy(() -> rights.transition(request.requestId(),
+                RightsRequestStatus.RECEIVED, "priya", null, "compliance-console"))
+                .isInstanceOf(IllegalArgumentException.class)
+                // "Nobody has looked at this yet" stops being true the moment somebody has.
+                .hasMessageContaining("cannot move to RECEIVED")
+                // And the message says what the operator *can* do, because a console button that
+                // sometimes fails for unexplained reasons gets worked around rather than fixed.
+                .hasMessageContaining("AWAITING_SUBJECT");
+
+        // Forwards and sideways stay legal: a request genuinely does go back and forth between
+        // being worked and waiting on the principal for verification.
+        rights.transition(request.requestId(), RightsRequestStatus.AWAITING_SUBJECT, "priya", null,
+                "compliance-console");
+        assertThat(rights.transition(request.requestId(), RightsRequestStatus.IN_PROGRESS, "priya",
+                null, "compliance-console").status()).isEqualTo(RightsRequestStatus.IN_PROGRESS);
+    }
+
+    @Test
+    @DisplayName("a request can be fulfilled on the call that reported it, deliberately")
+    void receivedStraightToFulfilledIsAllowed() {
+        // The transition a reader would expect to be barred, left legal on purpose. A principal
+        // asks what is held about them and the agent reads it out: that is a real access request,
+        // really fulfilled, in one interaction. Forbidding it would not produce more work — it
+        // would teach operators to click through IN_PROGRESS on the way past, and a state machine
+        // people route around records less than one that admits the shortcut.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
+                "Read out on the call; nothing further held", "compliance-console").status())
+                .isEqualTo(RightsRequestStatus.FULFILLED);
+    }
+
+    @Test
+    @DisplayName("the PATCH endpoint moves a request, and refuses the caller who may not")
+    void theTransitionEndpointIsReachableOverHttp() {
+        // Until this test, PATCH /v1/rights/{requestId} was the only route in the tree with no
+        // test at all — the only ADMIN write on the statutory rights path, absent from AdminApiIT's
+        // route sweep, and no test anywhere issued an HTTP PATCH. A service-level test of
+        // transition() proves the rule and proves nothing about whether the rule is reachable: a
+        // wrong @PreAuthorize, a body that does not bind, or a verb Spring does not route would all
+        // pass every assertion above.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ERASURE, Jurisdiction.IN, Instant.now());
+        String path = "/v1/rights/" + request.requestId();
+
+        ResponseEntity<String> refused = rest.withBasicAuth("denave-web", "capture-secret")
+                .exchange(path, HttpMethod.PATCH, new HttpEntity<>(Map.of(
+                        "status", "IN_PROGRESS")), String.class);
+        assertThat(refused.getStatusCode())
+                .withFailMessage("a capture credential moved a rights request")
+                .isEqualTo(HttpStatus.FORBIDDEN);
+
+        ResponseEntity<String> moved = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange(path, HttpMethod.PATCH, new HttpEntity<>(Map.of(
+                        "status", "IN_PROGRESS", "assignedTo", "priya")), String.class);
+        assertThat(moved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(moved.getBody()).contains("IN_PROGRESS").contains("priya");
+
+        // And the state machine is enforced through the endpoint too, as a 400 rather than a 500 —
+        // the caller made a mistake, and ApiExceptionHandler maps IllegalArgumentException to a
+        // ProblemDetail that says which one.
+        ResponseEntity<String> backwards = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange(path, HttpMethod.PATCH, new HttpEntity<>(Map.of(
+                        "status", "RECEIVED")), String.class);
+        assertThat(backwards.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(backwards.getBody()).contains("cannot move to RECEIVED");
+
+        // Closing without a resolution is still refused over HTTP, which is the rule that was
+        // already tested at the service and never at the edge.
+        ResponseEntity<String> unexplained = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange(path, HttpMethod.PATCH, new HttpEntity<>(Map.of(
+                        "status", "REJECTED")), String.class);
+        assertThat(unexplained.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(unexplained.getBody()).contains("resolution");
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private RightsRequestStore.Request file(RightsRequestType type, Jurisdiction jurisdiction,
                                             Instant receivedAt) {
         return rights.intake(new RightsService.Intake(ENTITY, "it-rights-" + UUID.randomUUID(),
                 null, null, type, jurisdiction, receivedAt, "filed by integration test",
-                "compliance-console"));
+                "compliance-console", RightsVerificationMethod.UNVERIFIED, null));
     }
 }

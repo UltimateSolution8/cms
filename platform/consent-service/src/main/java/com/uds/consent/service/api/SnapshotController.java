@@ -64,8 +64,15 @@ public class SnapshotController {
      */
     @GetMapping("/keys")
     public List<ConsentApi.VerificationKey> verificationKeys() {
-        return List.of(new ConsentApi.VerificationKey(
-                keys.keyId(), "Ed25519", keys.publicKeyBase64()));
+        // Every key still trusted, not just the one this instance signs with. That is what makes a
+        // rotation a non-event: a device holding a snapshot signed minutes before the change can
+        // still find the key that verifies it, for as long as the outgoing key stays RETIRED
+        // rather than COMPROMISED. Returning one key — which is what this did — meant every
+        // rotation silently stopped enforcement on every device mid-shift.
+        return keys.verificationKeys().entrySet().stream()
+                .map(entry -> new ConsentApi.VerificationKey(entry.getKey(), "Ed25519",
+                        Base64.getEncoder().encodeToString(entry.getValue().getEncoded())))
+                .toList();
     }
 
     /** The purposes a snapshot carries, so a client can size its local store. */

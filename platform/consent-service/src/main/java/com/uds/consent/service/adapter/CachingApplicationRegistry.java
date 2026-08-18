@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -59,10 +60,17 @@ public class CachingApplicationRegistry implements PolicyPorts.ApplicationRegist
      */
     @Scheduled(fixedDelayString = "${uds.consent.registry-refresh-interval:PT5M}")
     public final void refresh() {
+        // Scope in the same pass as the registry. Loading them separately would leave a window in
+        // which a surface is known but its reach is not, and a request arriving inside it would be
+        // denied for acting outside a scope that had simply not loaded yet.
+        Map<String, Set<String>> scopes = store.entityScopes();
+
         Map<String, PolicyPorts.RegisteredApplication> loaded = store.findAll().stream()
                 .map(application -> new PolicyPorts.RegisteredApplication(
                         application.applicationId(), application.entityId(), application.name(),
-                        application.platform(), application.environment(), application.active()))
+                        application.platform(), application.environment(), application.active(),
+                        scopes.getOrDefault(application.applicationId(),
+                                Set.of(application.entityId()))))
                 .collect(Collectors.toUnmodifiableMap(
                         PolicyPorts.RegisteredApplication::applicationId, Function.identity()));
 

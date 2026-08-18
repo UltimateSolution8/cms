@@ -1,0 +1,209 @@
+# =====================================================================================
+# UDS Consent & Privacy Control Plane — Deployment.
+#
+# The platform had no deployment path at all beyond a developer's docker-compose, which is why
+# "production-ready" could not be asserted about it regardless of how good the code was.
+#
+# Read alongside secrets.yaml (what must be injected and what must never be baked in) and
+# service.yaml (ingress, TLS, budget, autoscaling). Everything here is deliberately explicit:
+# a manifest that relies on cluster defaults is a manifest that behaves differently in the
+# cluster nobody tested it in.
+# =====================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uds-consent
+  labels:
+    app.kubernetes.io/name: uds-consent
+    app.kubernetes.io/component: control-plane
+spec:
+  # Three, not two. The decision API is on the critical path of every outbound campaign, and
+  # two replicas means a rolling deploy runs on one. The sweepers coordinate through SweepLock
+  # so extra replicas do not multiply scheduled work.
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: uds-consent
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: uds-consent
+    spec:
+      serviceAccountName: uds-consent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread across zones. A consent platform that goes dark takes every outbound campaign in
+      # the group with it — the correct behaviour on a decision the platform cannot answer is to
+      # not make the call.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: uds-consent
+      containers:
+        - name: uds-consent
+          image: uds/consent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            # The actuator, on its own port. /actuator/prometheus publishes denial reasons,
+            # capture volumes and rights-queue depth without a credential — an accurate picture of
+            # a regulated system's operations. On 8080 that is one ingress rule away from the
+            # internet; on 9090 nothing routes to it but the scraper and the kubelet, and the
+            # NetworkPolicy in service.yaml says so explicitly.
+            #
+            # The probes below moved with it. They must: health is no longer served on 8080, so a
+            # probe left pointing there fails on every pod, forever, and the deployment never
+            # becomes ready.
+            - name: management
+              containerPort: 9090
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # ---------------------------------------------------------------------------
+          # Probes. Liveness and readiness answer different questions and must not share a
+          # path — this is the single most consequential thing in this file.
+          #
+          # PlatformHealthIndicator reports DOWN when the integrity sweep finds a broken hash
+          # chain. Hanging liveness on that would restart the pod, the sweep would find the same
+          # broken chain, and the platform would crash-loop over a data condition no restart can
+          # fix — taking the decision API down with it, at the exact moment somebody needs to be
+          # looking at the ledger.
+          #
+          # So: a broken chain drains the instance and pages a human. It never restarts it.
+          # ---------------------------------------------------------------------------
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            # Flyway runs on the way up. Generous, because a migration interrupted by an
+            # impatient probe is the worst possible failure on an append-only schema.
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 2
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              # No CPU limit. Throttling the decision path to enforce a quota it rarely reaches
+              # turns a p95 in milliseconds into one in hundreds of milliseconds, and the SLO
+              # this platform publishes is 30 ms. Memory is limited because the JVM sizes its
+              # heap against it — see JAVA_OPTS in the Dockerfile.
+              memory: "2Gi"
+
+          env:
+            - name: SERVER_PORT
+              value: "8080"
+            - name: MANAGEMENT_PORT
+              value: "9090"
+            - name: SPRING_PROFILES_ACTIVE
+              value: "json-logging"
+
+            # Two roles, never one. Flyway migrates as the owner; the service runs as a role
+            # whose UPDATE and DELETE on the evidence tables V2 has revoked. Pointing both at
+            # the same user silently returns the ability to edit history — and the platform
+            # would look entirely healthy while doing it.
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef: { name: uds-consent-db, key: url }
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: uds-consent-db, key: app-user }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: uds-consent-db, key: app-password }
+            - name: DB_MIGRATION_USER
+              valueFrom:
+                secretKeyRef: { name: uds-consent-db, key: owner-user }
+            - name: DB_MIGRATION_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: uds-consent-db, key: owner-password }
+            - name: DB_POOL_SIZE
+              # Justify this against the capacity model before changing it, and never past the
+              # database's own max_connections divided by the replica count. See docs/CAPACITY.md.
+              value: "20"
+
+            # The pepper. The service refuses to start without it and refuses to start with
+            # fewer than 32 characters — both are the design working. Never bake it into the
+            # image: an image carrying a default produces a database of reversible phone numbers
+            # that nobody discovers for a year.
+            - name: IDENTIFIER_PEPPER
+              valueFrom:
+                secretKeyRef: { name: uds-consent-crypto, key: identifier-pepper }
+
+            # Snapshot signing. Both halves together — the JDK's Ed25519 private encoding does
+            # not carry the public point. Rotation is a runbook with a mechanism behind it now;
+            # see OPERATIONS.md §2.2 before changing the key id.
+            - name: SNAPSHOT_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: uds-consent-crypto, key: snapshot-key-id }
+            - name: SNAPSHOT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef: { name: uds-consent-crypto, key: snapshot-signing-key }
+            - name: SNAPSHOT_VERIFICATION_KEY
+              valueFrom:
+                secretKeyRef: { name: uds-consent-crypto, key: snapshot-verification-key }
+
+            - name: CLIENT_DENAVE_WEB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: uds-consent-clients, key: denave-web }
+            - name: CLIENT_ATHENA_DIALER_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: uds-consent-clients, key: athena-dialer }
+            - name: CLIENT_CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: uds-consent-clients, key: compliance-console }
+
+            # Where consent changes go. 'log' reaches nobody — switch this before any downstream
+            # system depends on hearing about a withdrawal.
+            - name: EVENT_PUBLISHER
+              value: "webhook"
+
+            # Regulatory surfaces built ahead of the obligation that triggers them. Off is a
+            # decision with an owner and a re-enabling condition; see REGULATORY_HANDOFF §8.4.
+            - name: FEATURE_KOREA_RECONFIRMATION
+              value: "false"
+            - name: FEATURE_CONSENT_MANAGER_RELAY
+              value: "false"
+
+      volumes:
+        # readOnlyRootFilesystem is on, and the JVM still needs somewhere to write.
+        - name: tmp
+          emptyDir: {}
+
+      # Long enough to finish an in-flight capture. A consent write cut off mid-transaction is
+      # rolled back correctly — the ledger is safe either way — but the subject in front of the
+      # form sees an error and, more often than not, does not try again.
+      terminationGracePeriodSeconds: 45

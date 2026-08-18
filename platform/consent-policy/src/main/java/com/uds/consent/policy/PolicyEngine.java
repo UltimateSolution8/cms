@@ -44,6 +44,8 @@ public class PolicyEngine {
     private final PolicyPorts.SuppressionLookup suppression;
     private final PolicyPorts.ProvenanceLookup provenance;
     private final PolicyPorts.SubjectAttributeLookup subjects;
+    private final PolicyPorts.ApplicationRegistry applications;
+    private final PolicyPorts.VendorAuthorisation vendors;
     private final Map<Jurisdiction, List<JurisdictionModule>> modules;
     private final String policyVersion;
 
@@ -52,6 +54,8 @@ public class PolicyEngine {
                         PolicyPorts.SuppressionLookup suppression,
                         PolicyPorts.ProvenanceLookup provenance,
                         PolicyPorts.SubjectAttributeLookup subjects,
+                        PolicyPorts.ApplicationRegistry applications,
+                        PolicyPorts.VendorAuthorisation vendors,
                         List<JurisdictionModule> jurisdictionModules,
                         String policyVersion) {
         this.purposes = purposes;
@@ -59,6 +63,8 @@ public class PolicyEngine {
         this.suppression = suppression;
         this.provenance = provenance;
         this.subjects = subjects;
+        this.applications = applications;
+        this.vendors = vendors;
         this.policyVersion = policyVersion;
         this.modules = new EnumMap<>(Jurisdiction.class);
         // Several modules can govern one jurisdiction — India is subject to both DPDP and the
@@ -113,15 +119,67 @@ public class PolicyEngine {
                     "purpose does not permit channel " + request.channel());
         }
 
-        // Gate 5 — children. DPDP s.9 closes some purposes to under-eighteens however consent
+        // Gate 5 — the caller. An applicationId that names a surface the group does not have, or
+        // has deactivated, or that belongs to a different entity, is refused.
+        //
+        // Absent is not a violation. Many server-side callers legitimately have no application
+        // identity — a batch job reconciling the CRM is not a surface — and denying them would
+        // stop lawful processing to enforce a field they were never asked for. A supplied-but-wrong
+        // value is the failure worth catching, and it is precisely what a leaked credential from
+        // one entity being replayed against another produces.
+        if (request.applicationId() != null && !request.applicationId().isBlank()) {
+            Optional<PolicyPorts.RegisteredApplication> application =
+                    applications.find(request.applicationId());
+            if (application.isEmpty()) {
+                return deny(request, purpose.version(), DenialReason.APPLICATION_NOT_AUTHORISED,
+                        "application is not registered");
+            }
+            if (!application.get().active()) {
+                return deny(request, purpose.version(), DenialReason.APPLICATION_NOT_AUTHORISED,
+                        "application has been deactivated");
+            }
+            if (!application.get().serves(request.entityId())) {
+                // The check that catches a credential moving between entities. Scope rather than
+                // ownership, because shared operational systems are the group's business model —
+                // but enumerated scope, so a surface reaches the entities somebody granted it and
+                // no others. Until per-entity row-level security lands, this is the only place a
+                // cross-entity request is visible at all.
+                return deny(request, purpose.version(), DenialReason.APPLICATION_NOT_AUTHORISED,
+                        "application is not authorised to act for this fiduciary entity");
+            }
+        }
+
+        // Gate 6 — the recipient. A processor named on the request must be authorised for this
+        // purpose, which is what a data processing agreement scopes. Before this gate the platform
+        // would answer ALLOW for data being handed to a vendor whose DPA does not cover it, and
+        // VendorStore.isAuthorisedFor — javadoc'd as "read on the decision path" — was called by
+        // nothing but a test.
+        //
+        // Absent is not a violation, for the same reason as above.
+        if (request.vendorId() != null && !request.vendorId().isBlank()
+                && !vendors.isAuthorisedFor(request.vendorId(), request.purposeCode())) {
+            return deny(request, purpose.version(), DenialReason.VENDOR_NOT_AUTHORISED,
+                    "vendor is not authorised for this purpose");
+        }
+
+        // Gate 7 — children. DPDP s.9 closes some purposes to under-eighteens however consent
         // was obtained, so this precedes any look at the consent record.
-        boolean isChild = request.isChildSubject() || subjects.isChild(request.subjectId());
+        //
+        // Asked as at request.at() rather than as at now. A replay of a decision taken in 2026 about
+        // somebody who has since turned eighteen must answer the question the engine actually faced
+        // that day; asking today's question makes every decision taken while they were a minor read
+        // back as lawful, which is the one direction an evidence plane must never be wrong in.
+        //
+        // The caller's own declaration still wins on top: a surface that knows it is talking to a
+        // minor is not overridden by a store nobody has told.
+        boolean isChild = request.isChildSubject()
+                || subjects.isChildAt(request.entityId(), request.subjectId(), request.at());
         if (isChild && !purpose.permittedForChildren()) {
             return deny(request, purpose.version(), DenialReason.CHILD_SUBJECT_RESTRICTED,
                     "purpose is not permitted for a subject under eighteen");
         }
 
-        // Gate 6 — suppression. A statutory registry entry outranks any consent record: someone
+        // Gate 8 — suppression. A statutory registry entry outranks any consent record: someone
         // on the national preference register is not contactable on a promotional purpose even
         // with a valid consent row. Non-statutory opt-outs bind us just as firmly, but only
         // within their scope.
@@ -137,7 +195,7 @@ public class PolicyEngine {
             }
         }
 
-        // Gate 7 — provenance. Applies to commercially-motivated processing, where the question
+        // Gate 9 — provenance. Applies to commercially-motivated processing, where the question
         // "where did this record come from" has a real answer that may be "we cannot say". It
         // does not apply to employment or legal-obligation processing, where the engagement
         // itself is the provenance.
@@ -147,14 +205,14 @@ public class PolicyEngine {
                     "record is quarantined: its origin could not be substantiated");
         }
 
-        // Gate 8 — bases that need no consent record are permitted from here.
+        // Gate 10 — bases that need no consent record are permitted from here.
         if (!basis.requiresConsentRecord()) {
             return applyModules(request, purpose, basis,
                     DecisionResponse.allow(purpose.code(), purpose.version(), basis, policyVersion,
                             request.at(), null, List.of()));
         }
 
-        // Gate 9 — the consent record itself.
+        // Gate 11 — the consent record itself.
         Optional<ConsentArtefact> artefactOpt =
                 artefacts.find(request.entityId(), request.subjectId(), request.purposeCode());
 
@@ -194,7 +252,15 @@ public class PolicyEngine {
         if (request.channel() == null) {
             return false;
         }
-        return request.channel().isCommercialCommunication() || basis.honoursObjection();
+        if (request.channel().isCommercialCommunication() || basis.honoursObjection()) {
+            return true;
+        }
+        // And in the US states that mandate a universal opt-out. Those signals are carried by the
+        // browser and apply to web activity — which is exactly the channel the two clauses above
+        // skip, since a web page is not a commercial communication and consent does not honour
+        // objection. Without this, a GPC signal could be recorded correctly, sit in the
+        // suppression table, and never be read on the requests it was sent about.
+        return request.jurisdiction().usesUniversalOptOut();
     }
 
     private static boolean requiresProvenance(LegalBasis basis) {

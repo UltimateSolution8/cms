@@ -47,9 +47,36 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!-- Bearer tokens from the group's OIDC provider, alongside the HTTP Basic credentials rather
+         than instead of them. Version managed by spring-boot-dependencies: pinning it here is how
+         a Spring Security skew gets introduced between the resource server and the starter. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+    </dependency>
+
+    <!-- Scrape endpoint for the meters PlatformMetrics already registers. Boot manages the
+         version; the 1.12.6 that was cached locally is the obsolete simpleclient generation that
+         Boot 3.5 dropped auto-configuration for, so pinning would produce a 404 at /prometheus
+         and no explanation of it. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+
+    <!-- Tracing, off unless an OTLP endpoint is configured. See application.yml: an exporter
+         retrying into a void on every span is CPU spent to produce nothing. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
     </dependency>
 
     <!-- Fan-out to downstream systems. The producer connects lazily, so a deployment that

@@ -34,12 +34,14 @@ public class ExpirySweeper {
     private final ConsentEventStore events;
     private final ConsentLedger ledger;
     private final PlatformProperties properties;
+    private final SweepLock lock;
 
     public ExpirySweeper(ConsentEventStore events, ConsentLedger ledger,
-                         PlatformProperties properties) {
+                         PlatformProperties properties, SweepLock lock) {
         this.events = events;
         this.ledger = ledger;
         this.properties = properties;
+        this.lock = lock;
     }
 
     @Scheduled(fixedDelayString = "${uds.consent.sweeper.expiry-interval:PT5M}")
@@ -47,10 +49,15 @@ public class ExpirySweeper {
         if (!properties.getSweeper().isExpiryEnabled()) {
             return;
         }
-        int written = sweepAsOf(Instant.now());
-        if (written > 0) {
-            log.info("wrote {} EXPIRED event(s)", written);
-        }
+        // Idempotency keys already stop two instances writing the same EXPIRED event twice, so the
+        // lock here buys efficiency rather than correctness — unlike the other two sweeps, where it
+        // buys both.
+        lock.runExclusively("expiry", () -> {
+            int written = sweepAsOf(Instant.now());
+            if (written > 0) {
+                log.info("wrote {} EXPIRED event(s)", written);
+            }
+        });
     }
 
     /**

@@ -66,20 +66,6 @@ public class ConsentArtefactStore {
                 .list();
     }
 
-    /** Number of artefacts standing against a given purpose version. Feeds blast-radius. */
-    public Map<String, Long> countByStatusForPurpose(String purposeCode, int purposeVersion) {
-        return jdbc.sql("""
-                        select status, count(*) as n from consent_artefact
-                         where purpose_code = :purposeCode and purpose_version = :purposeVersion
-                         group by status
-                        """)
-                .param("purposeCode", purposeCode)
-                .param("purposeVersion", purposeVersion)
-                .query((rs, n) -> Map.entry(rs.getString("status"), rs.getLong("n")))
-                .list().stream()
-                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    }
-
     /** Writes the projected state. Called only by the projector, inside the append transaction. */
     public void upsert(ConsentArtefact artefact, int conflictCount) {
         jdbc.sql("""

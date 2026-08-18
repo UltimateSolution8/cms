@@ -53,11 +53,47 @@ public record CaptureViolation(String purposeCode, Code code, String detail) {
         /** Subject is under eighteen and consent was not verifiably given by a guardian. */
         PARENTAL_CONSENT_REQUIRED,
 
+        /**
+         * A guardian consented and the diligence performed on that guardian was not recorded.
+         *
+         * <p>Distinct from {@link #PARENTAL_CONSENT_REQUIRED}, which catches a child capture that
+         * did not claim parental consent at all. This catches one that claims it and offers no
+         * evidence — the submission asserts {@code PARENTAL_VERIFIED} or names a
+         * {@code PARENT_GUARDIAN} actor and says nothing about how anyone was verified.
+         *
+         * <p>Two codes rather than one because the remediation differs. The first is a consent
+         * flow that has to be rebuilt; the second is a consent flow that is very likely already
+         * doing the work and not reporting it, and telling an integrator to "obtain parental
+         * consent" when the real answer is "send us the token reference you already have" wastes
+         * everybody's time. DPDP Rule 10 requires the fiduciary to observe due diligence, so the
+         * diligence is the obligation and this is the code that names it.
+         */
+        GUARDIAN_VERIFICATION_NOT_EVIDENCED,
+
         /** No language was recorded, so it cannot be shown the subject could read the notice. */
         LANGUAGE_NOT_RECORDED,
 
         /** No notice version was recorded, so what the subject saw cannot be reproduced. */
         NOTICE_VERSION_NOT_RECORDED,
+
+        /**
+         * A notice version was recorded and does not exist.
+         *
+         * <p>Distinct from {@link #NOTICE_VERSION_NOT_RECORDED}, which catches an absent field.
+         * This catches a present one that points at nothing — a citation of notice v99 that was
+         * never published. Both destroy the evidence plane's central promise; only this one looks
+         * entirely well-formed while doing it.
+         */
+        NOTICE_VERSION_UNKNOWN,
+
+        /**
+         * The notice exists but not in the language the subject was served in.
+         *
+         * <p>A notice the subject could not read is not an informed notice, and a consent record
+         * citing one is evidence of the wrong thing. Usually a translation-procurement gap rather
+         * than a bug, which is why it is a separate code: the remediation is a purchase order.
+         */
+        NOTICE_LANGUAGE_UNAVAILABLE,
 
         /** Consent was claimed for a purpose that does not rest on consent in this jurisdiction. */
         CONSENT_NOT_THE_BASIS,

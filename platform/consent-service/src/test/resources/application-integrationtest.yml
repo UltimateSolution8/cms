@@ -8,6 +8,14 @@ spring:
     enabled: true
     clean-disabled: true
 
+# Random, like the traffic port. Production pins this to 9090; a fixed port here would collide
+# between the several contexts these suites boot, and the failure — "address already in use" from
+# a context that has nothing to do with the test that reported it — is one of the least
+# informative a build can produce.
+management:
+  server:
+    port: 0
+
 uds:
   consent:
     policy-version: policy-integration-test
@@ -18,6 +26,40 @@ uds:
       # The SLA sweeper is driven directly with a controlled clock. Deadline behaviour that
       # can only be exercised by waiting a month does not get tested.
       rights-sla-enabled: false
+      # Same reasoning: the breach sweep is driven directly with a controlled clock.
+      breach-sla-enabled: false
+      retention-enabled: false
+    # Both on here, and off in application.yml. The suites that cover them — ConsentManagerIT,
+    # ReconfirmationIT, and AdminApiIT's route sweep — exist to prove the code is correct for the
+    # day the obligation lands, and a flag that dark-starts the feature must not also stop it being
+    # tested. FeatureFlagIT boots a second context with them at their production defaults and
+    # asserts the surface is genuinely gone, which is the other half of the same control.
+    features:
+      korea-reconfirmation: true
+      consent-manager-relay: true
+
+    # Off for the suites, on in production. These tests fire hundreds of requests as fast as the
+    # JVM will send them, which is exactly the traffic shape the limiter exists to refuse — leaving
+    # it on would make unrelated assertions fail intermittently depending on machine speed, which
+    # is the worst kind of test. RateLimitIT boots its own context with it on and limits set to
+    # single digits, so the behaviour is proved somewhere it can be proved deterministically.
+    rate-limit:
+      enabled: false
+      # PreAuthRateLimitIT boots its own context with the limiter on and this ceiling in single
+      # digits. Left off here for the same reason as the rest: it runs in front of authentication
+      # and would count every request every suite makes from one address.
+
+    # Deliberately 120 days rather than the shipped 90, and the difference is the assertion.
+    # RightsRequestIT reads this back off PlatformProperties, so a mis-keyed property would leave
+    # the Java field default of 90 in place and fail — which is the point. A test asserting that
+    # the property *exists* would pass either way, and this programme has already shipped one
+    # config key the framework never read (otel.exporter.otlp.endpoint, Phase 12 defect 4).
+    #
+    # Longer, not shorter, because RightsRequestIT files a request 60 days back to give the SLA
+    # sweeper a real breach to find.
+    rights:
+      max-backdate: P120D
+
     events:
       publisher: log
     # Every client the base configuration declares needs a password here, because the platform
@@ -34,6 +76,35 @@ uds:
         compliance-console:
           password: admin-secret
           roles: [ADMIN]
+        # Scoped credentials, for the isolation suite. Kept separate from the three above so that
+        # every other suite keeps exercising the group-level path it always has — adding a claim
+        # to compliance-console would have quietly changed what a dozen unrelated tests were
+        # testing.
+        denave-console:
+          password: denave-secret
+          roles: [ADMIN]
+          entity-id: DENAVE_IN
+        matrix-console:
+          password: matrix-secret
+          roles: [ADMIN]
+          entity-id: MATRIX
+        # A Consent Manager relay credential. Group level rather than entity scoped: a registered
+        # Consent Manager acts for principals across whichever entities they deal with, and the
+        # entity it may write to is decided per relay by the entity named in the body — which the
+        # row-level policy enforces regardless of what the filter parsed.
+        cm-test-client:
+          password: cm-secret
+          roles: [CONSENT_MANAGER]
+        cm-deregistered-client:
+          password: cm-deregistered-secret
+          roles: [CONSENT_MANAGER]
+        # A second *registered* Consent Manager, holding CM-TEST-0003. It exists so that the
+        # binding check can be tested with status held constant: a relay from cm-test-client
+        # naming the deregistered number is refused for being deregistered, which proves nothing
+        # about whether the platform checks who is asking.
+        cm-other-client:
+          password: cm-other-secret
+          roles: [CONSENT_MANAGER]
 
 logging:
   level:

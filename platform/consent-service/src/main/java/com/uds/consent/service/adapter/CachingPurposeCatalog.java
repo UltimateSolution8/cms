@@ -6,6 +6,7 @@ import com.uds.consent.policy.port.PolicyPorts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -63,7 +64,12 @@ public class CachingPurposeCatalog implements PolicyPorts.PurposeCatalog {
      * <p>Called at startup, on a timer, and explicitly whenever an administrator publishes a
      * purpose version — the explicit call is what makes a publish take effect immediately on the
      * instance that served it, rather than after the next tick.
+     *
+     * <p>On the same interval as {@link CachingApplicationRegistry}, deliberately. Two
+     * independently-timed caches on the capture path would leave a window in which a purpose is
+     * known to one and not the other, and the resulting rejection would be intermittent.
      */
+    @Scheduled(fixedDelayString = "${uds.consent.registry-refresh-interval:PT5M}")
     public final void refresh() {
         List<PurposeDefinition> loaded = store.loadCurrentVersions();
         // Both fields are replaced with fully-built immutable values, so a concurrent reader sees

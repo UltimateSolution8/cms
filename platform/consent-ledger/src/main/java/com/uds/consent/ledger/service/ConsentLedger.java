@@ -7,6 +7,7 @@ import com.uds.consent.ledger.store.ConsentArtefactStore;
 import com.uds.consent.ledger.store.ConsentEventStore;
 import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.StoredEvent;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,20 +26,27 @@ import java.util.Optional;
 @Service
 public class ConsentLedger {
 
-    /** Topic names are part of the platform's public contract; downstream teams subscribe to them. */
+    /**
+     * Default topic. Topic names are part of the platform's public contract — downstream teams
+     * subscribe to them — which is why this is overridable rather than fixed: a group that already
+     * has a naming convention for its event bus should not have to fork the platform to follow it.
+     */
     public static final String TOPIC_CONSENT = "uds.consent.events";
 
     private final ConsentEventStore events;
     private final ConsentArtefactStore artefacts;
     private final ArtefactProjector projector;
     private final OutboxStore outbox;
+    private final String topic;
 
     public ConsentLedger(ConsentEventStore events, ConsentArtefactStore artefacts,
-                         ArtefactProjector projector, OutboxStore outbox) {
+                         ArtefactProjector projector, OutboxStore outbox,
+                         @Value("${uds.consent.events.topic:" + TOPIC_CONSENT + "}") String topic) {
         this.events = events;
         this.artefacts = artefacts;
         this.projector = projector;
         this.outbox = outbox;
+        this.topic = topic;
     }
 
     /**
@@ -58,7 +66,7 @@ public class ConsentLedger {
         }
 
         projector.apply(stored);
-        outbox.enqueue(TOPIC_CONSENT, stored.entityId() + '|' + stored.subjectId(),
+        outbox.enqueue(topic, stored.entityId() + '|' + stored.subjectId(),
                 publishablePayload(stored));
         return stored;
     }

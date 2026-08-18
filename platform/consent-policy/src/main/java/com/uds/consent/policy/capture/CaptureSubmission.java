@@ -3,6 +3,7 @@ package com.uds.consent.policy.capture;
 import com.uds.consent.core.model.ActorType;
 import com.uds.consent.core.model.CaptureMethod;
 import com.uds.consent.core.model.Channel;
+import com.uds.consent.core.model.GuardianVerification;
 import com.uds.consent.core.model.Jurisdiction;
 
 import java.time.Instant;
@@ -37,6 +38,11 @@ import java.util.Map;
  * @param idempotencyKey makes replay from a retrying field device safe
  * @param evidenceRef    pointer to the recording, signed form or DOM snapshot
  * @param attributes     extra context, e.g. the contract end date for inferred consent
+ * @param guardianVerification
+ *                       the due diligence performed on the parent or lawful guardian, where the
+ *                       subject is a child. Null for the ordinary adult capture, which is why it
+ *                       is nullable rather than required — but null on a child capture is a
+ *                       violation, not a default. See {@code DpdpModule.validateCapture}
  */
 public record CaptureSubmission(
         String entityId,
@@ -55,11 +61,45 @@ public record CaptureSubmission(
         Instant occurredAt,
         String idempotencyKey,
         String evidenceRef,
-        Map<String, String> attributes) {
+        Map<String, String> attributes,
+        GuardianVerification guardianVerification) {
+
+    /** Attribute a capture surface sets to declare the subject is under eighteen (DPDP s.9). */
+    public static final String ATTR_IS_CHILD = "subject.isChild";
 
     public CaptureSubmission {
         choices = choices == null ? List.of() : List.copyOf(choices);
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    }
+
+    /**
+     * The shape every surface used before guardian verification was recorded.
+     *
+     * <p>Kept so that adding the field did not require touching two dozen call sites that describe
+     * adult captures and have nothing to say about a guardian. A submission built this way carries
+     * no verification block, which is correct for an adult and a violation for a child — and the
+     * validator, not this constructor, is where that distinction belongs.
+     */
+    public CaptureSubmission(String entityId, String subjectId, Jurisdiction jurisdiction,
+                             String languageTag, Channel channel, String applicationId,
+                             CaptureMethod captureMethod, ActorType actorType, String actorId,
+                             String noticeId, Integer noticeVersion, List<PurposeChoice> choices,
+                             boolean rejectAllOffered, Instant occurredAt, String idempotencyKey,
+                             String evidenceRef, Map<String, String> attributes) {
+        this(entityId, subjectId, jurisdiction, languageTag, channel, applicationId, captureMethod,
+                actorType, actorId, noticeId, noticeVersion, choices, rejectAllOffered, occurredAt,
+                idempotencyKey, evidenceRef, attributes, null);
+    }
+
+    /**
+     * Whether the surface declared the subject to be under eighteen.
+     *
+     * <p>A declaration, not a finding. The platform has no way to determine anyone's age on its
+     * own; what it can do is refuse to accept the declaration without the diligence that DPDP
+     * Rule 10 attaches to it.
+     */
+    public boolean isChildSubject() {
+        return "true".equalsIgnoreCase(attributes.get(ATTR_IS_CHILD));
     }
 
     /** Purposes the subject said yes to. */

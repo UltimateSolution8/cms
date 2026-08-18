@@ -1,5 +1,6 @@
 package com.uds.consent.ledger.service;
 
+import com.uds.consent.core.model.ClockTolerance;
 import com.uds.consent.core.model.ConsentArtefact;
 import com.uds.consent.core.model.ConsentEvent;
 import com.uds.consent.core.model.ConsentEventType;
@@ -35,8 +36,14 @@ public class ArtefactProjector {
      * Five minutes is chosen to comfortably exceed the drift seen on Android devices that have
      * been offline for a working day; it should be revisited with real telemetry from the Denave
      * pilot rather than left at a guess.
+     *
+     * <p>Held in {@link com.uds.consent.core.model.ClockTolerance} rather than here, because rights
+     * intake needs the same window to decide whether a {@code receivedAt} in the future is a wrong
+     * clock or a claim about the future — and two independently chosen tolerances would be two
+     * definitions of "now" inside one evidence plane. The alias stays so that the rule reads where
+     * it is applied.
      */
-    static final Duration CLOCK_SKEW_TOLERANCE = Duration.ofMinutes(5);
+    static final Duration CLOCK_SKEW_TOLERANCE = ClockTolerance.SKEW;
 
     private final ConsentArtefactStore artefacts;
 

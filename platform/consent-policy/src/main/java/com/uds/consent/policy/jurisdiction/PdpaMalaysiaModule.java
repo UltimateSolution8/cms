@@ -20,9 +20,6 @@ import java.util.List;
  */
 public class PdpaMalaysiaModule implements JurisdictionModule {
 
-    /** Prefix by which the seeded taxonomy marks biometric categories. */
-    private static final String BIOMETRIC_PREFIX = "BIOMETRIC_";
-
     @Override
     public Jurisdiction jurisdiction() {
         return Jurisdiction.MY;
@@ -38,10 +35,14 @@ public class PdpaMalaysiaModule implements JurisdictionModule {
         List<String> obligations = new ArrayList<>();
         obligations.add("processor-carries-direct-statutory-liability");
 
-        boolean touchesBiometrics = purpose.dataCategories().stream()
-                .anyMatch(code -> code.startsWith(BIOMETRIC_PREFIX));
-        if (touchesBiometrics) {
+        // Read from the registry's own flag rather than from the shape of the category code. The
+        // previous check tested for a "BIOMETRIC_" prefix, which holds exactly until somebody adds
+        // a biometric category and names it something else — and then fails silently, treating
+        // sensitive personal data as ordinary personal data with nothing to notice it by.
+        if (purpose.touchesBiometricData()) {
             obligations.add("biometric-data-is-sensitive-personal-data");
+            obligations.add("explicit-consent-required");
+        } else if (purpose.touchesSensitiveData()) {
             obligations.add("explicit-consent-required");
         }
 

@@ -4,8 +4,12 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import javax.sql.DataSource;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The surfaces registered to submit consent.
@@ -65,6 +69,45 @@ public class ApplicationRegistryStore {
                 .param("environment", application.environment())
                 .param("description", application.description())
                 .param("active", application.active())
+                .update();
+    }
+
+    /**
+     * Entities each application may act for, keyed by application id.
+     *
+     * <p>Loaded whole rather than per application. The registry is a few dozen rows and the cache
+     * in front of it wants the entire picture at once; a per-application query would turn one
+     * refresh into one round trip per surface to answer a question about a table that fits on a
+     * screen.
+     */
+    public Map<String, Set<String>> entityScopes() {
+        Map<String, Set<String>> scopes = new HashMap<>();
+        jdbc.sql("select application_id, entity_id from application_entity_scope")
+                .query((rs, n) -> {
+                    scopes.computeIfAbsent(rs.getString("application_id"), k -> new HashSet<>())
+                            .add(rs.getString("entity_id"));
+                    return null;
+                })
+                .list();
+        return scopes;
+    }
+
+    /**
+     * Grants a surface reach over an entity.
+     *
+     * <p>Idempotent, so re-registering a shared system does not fail on a grant it already had.
+     * The rationale is recorded because "which surfaces could see Denave's data in August" is a
+     * question asked after an incident, and a bare join table cannot answer it.
+     */
+    public void grantEntityScope(String applicationId, String entityId, String rationale) {
+        jdbc.sql("""
+                        insert into application_entity_scope (application_id, entity_id, rationale)
+                        values (:applicationId, :entityId, :rationale)
+                        on conflict (application_id, entity_id) do nothing
+                        """)
+                .param("applicationId", applicationId)
+                .param("entityId", entityId)
+                .param("rationale", rationale)
                 .update();
     }
 

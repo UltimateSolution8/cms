@@ -51,7 +51,8 @@ public class OutboxRelay {
         int published = 0;
         for (OutboxStore.PendingMessage message : pending) {
             try {
-                publisher.publish(message.topic(), message.eventKey(), message.payload());
+                publisher.publish(message.topic(), message.eventKey(), message.payload(),
+                        message.id(), message.attempts());
                 outbox.markPublished(message.id());
                 published++;
             } catch (RuntimeException e) {

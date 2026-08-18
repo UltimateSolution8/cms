@@ -4,6 +4,8 @@ import com.uds.consent.core.crypto.IdentifierHasher;
 import com.uds.consent.core.model.ConsentArtefact;
 import com.uds.consent.core.model.ConsentEvent;
 import com.uds.consent.core.model.ConsentReceipt;
+import com.uds.consent.core.model.GuardianVerification;
+import com.uds.consent.core.model.IdentifierType;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.ledger.service.ConsentLedger;
 import com.uds.consent.ledger.store.StoredEvent;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -72,6 +75,7 @@ public class ConsentController {
             @Valid @RequestBody ConsentApi.CaptureRequest request) {
 
         String subjectId = resolveSubject(request.entityId(), request.subjectId(), request.subject());
+        linkAdditionalIdentifiers(request.entityId(), subjectId, request.alsoKnownAs());
         Instant occurredAt = request.occurredAt() == null ? Instant.now() : request.occurredAt();
 
         CaptureSubmission submission = new CaptureSubmission(
@@ -94,7 +98,8 @@ public class ConsentController {
                 occurredAt,
                 request.idempotencyKey(),
                 request.evidenceRef(),
-                request.attributes());
+                request.attributes(),
+                guardianVerification(request.guardianVerification()));
 
         ConsentCaptureService.Result result = capture.capture(submission);
 
@@ -107,6 +112,30 @@ public class ConsentController {
         return ResponseEntity.status(HttpStatus.CREATED).body(new ConsentApi.CaptureResponse(
                 true, subjectId, result.events().stream().map(ConsentController::summarise).toList(),
                 List.of()));
+    }
+
+    /**
+     * Hashes the guardian reference at the edge, exactly as a subject identifier is hashed.
+     *
+     * <p>The caller sends whatever it verified against — an account id, a DigiLocker virtual token
+     * — and nothing below this line ever sees it. The reasoning is the same one that keeps phone
+     * numbers out of the ledger, and applies with more force here: a guardian is not the data
+     * principal whose consent this is, they are a third party who appears in the record only
+     * because the law requires the check, and the platform has no business being able to identify
+     * them afterwards. It needs to prove a check happened against a stable reference, which a hash
+     * does.
+     *
+     * <p>{@code EXTERNAL_ID} is the right identifier type for this: it normalises by case and
+     * nothing else, which is correct for an opaque token and wrong for none of the plausible
+     * inputs.
+     */
+    private GuardianVerification guardianVerification(ConsentApi.GuardianVerificationDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        return new GuardianVerification(dto.method(),
+                hasher.hash(IdentifierType.EXTERNAL_ID, dto.reference()),
+                dto.verifiedAt(), dto.verifiedBy());
     }
 
     /**
@@ -133,6 +162,35 @@ public class ConsentController {
 
         return new ConsentApi.CaptureResponse(true, subjectId,
                 events.stream().map(ConsentController::summarise).toList(), List.of());
+    }
+
+    /**
+     * Records that a notice was served, without consent being sought.
+     *
+     * <p>The write path for legitimate uses under DPDP s.7(i) — employment processing and the like,
+     * where consent is not the basis and asking for it would misrepresent what the subject can
+     * change. Around 76,000 workforce records across the group belong here rather than in the
+     * consent path, and the obligation that binds for them is proof that they were told.
+     *
+     * <p>Separate from {@code POST /v1/consent} deliberately. A capture surface that had to decide
+     * for itself whether a purpose rests on consent would eventually decide wrongly, and the
+     * capture validator already rejects an attempt to record consent for such a purpose.
+     */
+    @PostMapping("/notice-served")
+    @PreAuthorize("hasAnyRole('CAPTURE', 'ADMIN')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ConsentApi.CaptureResponse noticeServed(
+            @Valid @RequestBody ConsentApi.NoticeServedRequest request) {
+
+        String subjectId = resolveSubject(request.entityId(), request.subjectId(), request.subject());
+        Instant occurredAt = request.occurredAt() == null ? Instant.now() : request.occurredAt();
+
+        ConsentEvent event = capture.recordNoticeServed(
+                request.entityId(), subjectId, request.purposeCode(), request.noticeId(),
+                request.noticeVersion(), request.languageTag(), request.jurisdiction(),
+                request.applicationId(), occurredAt, request.idempotencyKey());
+
+        return new ConsentApi.CaptureResponse(true, subjectId, List.of(summarise(event)), List.of());
     }
 
     /** Current state for every purpose on record. What a preference centre renders. */
@@ -180,7 +238,9 @@ public class ConsentController {
      */
     private String resolveSubject(String entityId, String subjectId, ConsentApi.SubjectRef ref) {
         if (subjectId != null && !subjectId.isBlank()) {
-            return subjectId;
+            // Canonicalised, because a surface may be holding an id from before a merge. Answering
+            // under a superseded id would write new events onto a chain nothing reads any more.
+            return subjects.canonical(subjectId);
         }
         if (ref == null) {
             throw new IllegalArgumentException(
@@ -188,6 +248,38 @@ public class ConsentController {
         }
         return subjects.resolveOrCreate(entityId, ref.identifierType(),
                 hasher.hash(ref.identifierType(), ref.value()));
+    }
+
+    /**
+     * Records the other identifiers a capture surface says belong to the same person.
+     *
+     * <p>The cheap half of identity resolution, and the half that prevents the problem instead of
+     * repairing it. Without this the platform resolves one identifier to one subject, so a person
+     * the group knows by a mobile number and by an email address is two subjects — and a
+     * withdrawal by email leaves the phone contactable, which is the failure a grievance surfaces
+     * first and the one a dialer will trip over at volume.
+     *
+     * <p>Asserted, never inferred. A form that collected both values from the person standing in
+     * front of it knows they are the same person. The platform matching them on its own would
+     * eventually join two people's records, and the first evidence of that would be a call to
+     * somebody who had withdrawn — strictly worse than the incompleteness it would be fixing.
+     *
+     * <p>An identifier already belonging to a <em>different</em> subject is left alone rather than
+     * moved: {@code linkIdentifier} does nothing on conflict. Silently re-pointing it here would
+     * let any capture surface reassign another person's identifier by asserting it in a form,
+     * which is a merge without an administrator, a reason, or a record. Reconciling two subjects
+     * that genuinely are one person goes through {@code POST /v1/admin/subjects/merge}, where it
+     * is attributed and immutable.
+     */
+    private void linkAdditionalIdentifiers(String entityId, String subjectId,
+                                           List<ConsentApi.SubjectRef> alsoKnownAs) {
+        if (alsoKnownAs == null || alsoKnownAs.isEmpty()) {
+            return;
+        }
+        for (ConsentApi.SubjectRef ref : alsoKnownAs) {
+            subjects.linkIdentifier(entityId, subjectId, ref.identifierType(),
+                    hasher.hash(ref.identifierType(), ref.value()));
+        }
     }
 
     private ConsentApi.ConsentStateDto toStateDto(ConsentArtefact artefact, Instant at) {

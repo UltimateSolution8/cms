@@ -6,10 +6,12 @@ import com.uds.consent.core.model.Channel;
 import com.uds.consent.core.model.ConsentEvent;
 import com.uds.consent.core.model.ConsentEventType;
 import com.uds.consent.core.model.ExpiryPolicy;
+import com.uds.consent.core.model.GuardianVerification;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.LegalBasis;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.ledger.service.ConsentLedger;
+import com.uds.consent.ledger.store.SubjectStore;
 import com.uds.consent.policy.capture.CaptureSubmission;
 import com.uds.consent.policy.capture.CaptureValidator;
 import com.uds.consent.policy.capture.CaptureViolation;
@@ -25,6 +27,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,12 +52,17 @@ public class ConsentCaptureService {
     private final CaptureValidator validator;
     private final PolicyPorts.PurposeCatalog purposes;
     private final ConsentLedger ledger;
+    private final PlatformMetrics metrics;
+    private final SubjectStore subjects;
 
     public ConsentCaptureService(CaptureValidator validator, PolicyPorts.PurposeCatalog purposes,
-                                 ConsentLedger ledger) {
+                                 ConsentLedger ledger, PlatformMetrics metrics,
+                                 SubjectStore subjects) {
         this.validator = validator;
         this.purposes = purposes;
         this.ledger = ledger;
+        this.metrics = metrics;
+        this.subjects = subjects;
     }
 
     /**
@@ -66,12 +74,17 @@ public class ConsentCaptureService {
      */
     @Transactional
     public Result capture(CaptureSubmission submission) {
+        long start = System.nanoTime();
         List<CaptureViolation> violations = validator.validate(submission);
+        metrics.capture(System.nanoTime() - start, violations);
         if (!violations.isEmpty()) {
             log.warn("rejected consent capture from application={} entity={} with {} violation(s)",
                     submission.applicationId(), submission.entityId(), violations.size());
             return Result.rejected(violations);
         }
+
+        recordAgeAssertion(submission);
+        Map<String, String> attributes = withGuardianVerification(submission);
 
         List<ConsentEvent> written = new ArrayList<>();
         for (CaptureSubmission.PurposeChoice choice : submission.choices()) {
@@ -112,7 +125,7 @@ public class ConsentCaptureService {
                     // purpose. Without this, the second event in a submission would collide with
                     // the first on the ledger's uniqueness constraint.
                     perPurposeKey(submission.idempotencyKey(), purpose.code()),
-                    submission.attributes(),
+                    attributes,
                     0L, null, null)));
         }
 
@@ -232,6 +245,54 @@ public class ConsentCaptureService {
                 return null;
             });
         };
+    }
+
+    /**
+     * Folds the guardian verification into the event attributes.
+     *
+     * <p>Attributes are inside {@code hashableBody()} and therefore inside the canonical payload
+     * and the hash chain. That is the whole reason this goes here rather than into a side table:
+     * the record of the diligence performed on a guardian cannot be altered afterwards without
+     * breaking the chain from that event forward, which is a stronger guarantee than any table of
+     * its own could offer and costs no schema at all.
+     *
+     * <p>Only the hashed reference travels. The raw account id or token never reaches this service
+     * — {@code ConsentController} hashes it at the edge — so there is nothing here to leak into a
+     * payload that is, by design, kept forever.
+     */
+    private static Map<String, String> withGuardianVerification(CaptureSubmission submission) {
+        GuardianVerification verification = submission.guardianVerification();
+        if (verification == null) {
+            return submission.attributes();
+        }
+        Map<String, String> attributes = new LinkedHashMap<>(submission.attributes());
+        attributes.put(GuardianVerification.ATTR_METHOD, verification.method().name());
+        attributes.put(GuardianVerification.ATTR_REFERENCE, verification.referenceHash());
+        attributes.put(GuardianVerification.ATTR_VERIFIED_AT, verification.verifiedAt().toString());
+        if (verification.verifiedBy() != null) {
+            attributes.put(GuardianVerification.ATTR_VERIFIED_BY, verification.verifiedBy());
+        }
+        return Map.copyOf(attributes);
+    }
+
+    /**
+     * Writes the minority assertion that came with this submission, if one did.
+     *
+     * <p>Only when the surface declares a child. A submission that says nothing about age is not
+     * asserting the subject is an adult, and recording {@code is_child = false} for every adult
+     * capture would fill the table with assertions nobody made — which would destroy the one thing
+     * it is for, namely being able to say who told us what, and when.
+     */
+    private void recordAgeAssertion(CaptureSubmission submission) {
+        if (!submission.isChildSubject()) {
+            return;
+        }
+        subjects.assertAge(submission.entityId(), submission.subjectId(), true,
+                "capture:" + submission.applicationId(), submission.occurredAt(),
+                submission.actorType() == null ? null : submission.actorType().name(),
+                submission.actorId(),
+                submission.guardianVerification() == null ? null
+                        : "guardian verified via " + submission.guardianVerification().method());
     }
 
     private static Optional<Instant> contractEnd(CaptureSubmission submission) {

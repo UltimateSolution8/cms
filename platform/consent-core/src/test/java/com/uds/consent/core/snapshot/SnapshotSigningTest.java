@@ -86,6 +86,61 @@ class SnapshotSigningTest {
                 .hasMessageContaining("unexpected algorithm");
     }
 
+    @Test
+    @DisplayName("a provider that never surrenders its private key can still sign")
+    void aRemoteKeyCustodianCanImplementTheSpi() {
+        // The assertion that justifies SigningKeyProvider existing. This stands in for a KMS: it
+        // holds the key behind a method call and exposes no way to obtain it, which is exactly the
+        // shape an HSM-backed implementation has. If the SPI ever grows a privateKey() accessor
+        // this test still compiles — so it asserts the behaviour instead, by holding the key in a
+        // closure the caller has no reference to.
+        KeyPair custodied = SnapshotSigner.generateKeyPair();
+        SigningKeyProvider remote = new SigningKeyProvider() {
+            @Override
+            public String keyId() {
+                return "kms-key-1";
+            }
+
+            @Override
+            public java.security.PublicKey publicKey() {
+                return custodied.getPublic();
+            }
+
+            @Override
+            public byte[] sign(byte[] signingInput) {
+                try {
+                    java.security.Signature signature =
+                            java.security.Signature.getInstance("Ed25519");
+                    signature.initSign(custodied.getPrivate());
+                    signature.update(signingInput);
+                    return signature.sign();
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+        };
+
+        SignedSnapshot signed = new SnapshotSigner(remote).sign(snapshot(ConsentStatus.GRANTED, null));
+
+        assertThat(signed.keyId()).isEqualTo("kms-key-1");
+        assertThat(new SnapshotVerifier(Map.of("kms-key-1", custodied.getPublic()))
+                .verify(signed).subjectId()).isEqualTo("subject-1");
+    }
+
+    @Test
+    @DisplayName("the kid in the header is the kid on the wire form")
+    void theHeaderNamesTheKeyThatSignedIt() {
+        // A snapshot naming one key in its header and another in its envelope would be rejected by
+        // whichever the verifier believed, and the failure reads as tampering rather than as a
+        // wiring mistake. Cheap to assert, and it pins the single read of keyId() in sign().
+        SignedSnapshot signed = signer.sign(snapshot(ConsentStatus.GRANTED, null));
+        String header = new String(java.util.Base64.getUrlDecoder().decode(signed.segments()[0]),
+                java.nio.charset.StandardCharsets.UTF_8);
+
+        assertThat(header).contains("\"kid\":\"test-key-1\"");
+        assertThat(signed.keyId()).isEqualTo("test-key-1");
+    }
+
     private static ConsentSnapshot snapshot(ConsentStatus status, Instant expiresAt) {
         return new ConsentSnapshot(
                 "snap-1", "DENAVE_IN", "subject-1", NOW, NOW.plus(15, ChronoUnit.MINUTES),

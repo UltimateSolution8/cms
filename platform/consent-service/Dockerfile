@@ -53,7 +53,18 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
 # The service refuses to start without a pepper, and that refusal is the design working. An
 # image carrying a default would produce a database of reversible hashes that nobody
 # discovers for a year.
+# Readiness, not the aggregate. /actuator/health goes DOWN when the integrity sweep finds a
+# broken hash chain, and a container healthcheck reading that would restart the process over a
+# data condition no restart can fix — a crash loop that takes the decision API down with it.
+# Readiness answers the question a healthcheck is actually asking: should this instance be
+# receiving traffic. Under Kubernetes, use /actuator/health/liveness for the liveness probe and
+# this path for the readiness probe; see deploy/k8s.
+#
+# Port 9090, not 8080: the actuator moved to its own port so that /actuator/prometheus — which
+# needs no credential — is not served on the port an ingress terminates on. Health moved with it,
+# so a healthcheck left on 8080 would fail forever and mark every container unhealthy.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:8080/actuator/health | grep -q '"status":"UP"' || exit 1
+    CMD wget -qO- http://localhost:9090/actuator/health/readiness \
+        | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

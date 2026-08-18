@@ -1,0 +1,79 @@
+# Point-in-time recovery, on a laptop.
+#
+# The restore procedure in docs/RUNBOOK_DR.md is worth exactly as much as the number of times it
+# has been run. This file exists so the first run is not at three in the morning during an
+# incident, and so the RPO and RTO numbers in §2 can be measured rather than proposed.
+#
+# It layers WAL archiving onto the development stack. Same role separation, same init scripts —
+# the point is to rehearse the real procedure, and a rehearsal against a differently-shaped
+# database rehearses the wrong thing.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dr.yml up -d
+#
+# Then walk RUNBOOK_DR.md §4 end to end, ending — always — with the chain verification. A restore
+# that skips step 6 has produced a ledger nobody can vouch for, which is worth less than no ledger,
+# because it will be relied on anyway.
+#
+# Walked for the first time on 17 August 2026; §5.1 is the record and §5.2 is the three defects it
+# found, one of them in this file.
+
+name: uds-consent
+
+services:
+
+  # Makes the archive directory writable by the postgres user, and it is not boilerplate: the
+  # 17 August 2026 rehearsal found that without it nothing is ever archived.
+  #
+  # A fresh named volume is root-owned; PostgreSQL runs as uid 70. The archive_command below is
+  # therefore executed as uid 70 into a directory it cannot write, and the failure mode is the
+  # dangerous kind — the server starts, reports archive_mode=on, accepts writes, and retries a
+  # failing `cp` forever with the only symptom a line in a log nobody is reading. `pg_stat_archiver`
+  # shows it, which is why the runbook's step 3a now looks there before trusting a backup.
+  #
+  # A one-shot init container rather than `user: root` on postgres: running the database as root
+  # would make the rehearsal diverge from the deployment in the one dimension the append-only
+  # guarantee is built on, which is exactly the substitution this file's header warns against.
+  wal-archive-init:
+    image: postgres:16-alpine
+    container_name: uds-consent-wal-archive-init
+    user: root
+    entrypoint: ["sh", "-c", "mkdir -p /wal-archive && chown -R 70:70 /wal-archive"]
+    volumes:
+      - wal-archive:/wal-archive
+
+  postgres:
+    depends_on:
+      wal-archive-init:
+        condition: service_completed_successfully
+    command:
+      - postgres
+      # Continuous archiving. This is the layer that makes an RPO of five minutes a fact rather
+      # than a hope: without it, recovery granularity is the nightly base backup and the honest
+      # RPO is twenty-four hours.
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      # cp, because this is a laptop. In a cluster this is the group's object-store shipper, and
+      # the archive lands in the residency region recorded on each entity — a backup bucket in the
+      # wrong region is a Rule 13(4) decision made by an infrastructure default.
+      #
+      # The test-then-copy shape is not decoration: a plain cp silently overwrites an existing
+      # segment, and an overwritten WAL segment is a hole in the recovery timeline that only
+      # announces itself during a restore.
+      - -c
+      - "archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f"
+      - -c
+      - archive_timeout=300
+      # Five minutes, matching the proposed RPO. A segment that fills faster is archived sooner;
+      # this bounds the quiet case, which is the case that hurts — a low-traffic hour before an
+      # incident is exactly when the last segment would otherwise sit unarchived.
+      - -c
+      - max_wal_senders=3
+      - -c
+      - log_min_duration_statement=100
+    volumes:
+      - wal-archive:/wal-archive
+
+volumes:
+  wal-archive:

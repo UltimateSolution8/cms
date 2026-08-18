@@ -1,6 +1,7 @@
 package com.uds.consent.core.model;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SortedMap;
@@ -83,6 +84,25 @@ public record ConsentEvent(
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(occurredAt, "occurredAt");
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+
+        // Truncated to microseconds, which is the resolution PostgreSQL's timestamptz actually
+        // stores. Without this the hashed payload records a precision the evidence plane cannot
+        // hold: `Instant.now()` on a modern JVM yields nanoseconds, the payload is serialised
+        // from it, the columns round-trip through the database at microseconds, and re-serialising
+        // the columns produces a different string from the one that was hashed.
+        //
+        // The consequence was not a broken chain — the chain hashes the payload, and the payload
+        // is stored verbatim — but a permanent PAYLOAD_DIVERGENCE finding on every event captured
+        // with sub-microsecond precision. A tamper check that fires on everything detects nothing,
+        // and this one is the check that would notice somebody editing the structured columns
+        // without being able to forge the payload.
+        //
+        // Found by running the platform by hand rather than by any test: every integration suite
+        // passes an instant truncated to seconds or a fixed literal, so none of them ever carried
+        // a nanosecond component into the ledger.
+        occurredAt = occurredAt.truncatedTo(ChronoUnit.MICROS);
+        recordedAt = recordedAt == null ? null : recordedAt.truncatedTo(ChronoUnit.MICROS);
+        expiresAt = expiresAt == null ? null : expiresAt.truncatedTo(ChronoUnit.MICROS);
     }
 
     /**

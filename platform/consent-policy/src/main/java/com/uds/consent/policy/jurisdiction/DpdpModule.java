@@ -2,6 +2,7 @@ package com.uds.consent.policy.jurisdiction;
 
 import com.uds.consent.core.decision.DecisionRequest;
 import com.uds.consent.core.decision.DecisionResponse;
+import com.uds.consent.core.model.ActorType;
 import com.uds.consent.core.model.CaptureMethod;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.LegalBasis;
@@ -115,7 +116,7 @@ public class DpdpModule implements JurisdictionModule {
 
         // s.9: a subject under eighteen needs verifiable parental consent, and some purposes are
         // closed to them however consent was obtained.
-        boolean isChild = "true".equalsIgnoreCase(submission.attributes().get("subject.isChild"));
+        boolean isChild = submission.isChildSubject();
         if (isChild) {
             if (submission.captureMethod() != CaptureMethod.PARENTAL_VERIFIED) {
                 violations.add(CaptureViolation.submission(
@@ -131,6 +132,37 @@ public class DpdpModule implements JurisdictionModule {
                             "this purpose may not be applied to a subject under eighteen"));
                 }
             }
+        }
+
+        // Rule 10, and the check the platform did not previously make.
+        //
+        // Everything above tests that the submission is internally consistent — a child capture
+        // says PARENTAL_VERIFIED, a child capture avoids purposes closed to children. None of it
+        // tests that anybody verified anything. PARENTAL_VERIFIED is a value the capture surface
+        // chooses for itself, so a surface that skipped the diligence entirely produced a record
+        // indistinguishable from one that did it properly, and the group could show a regulator a
+        // consent while having nothing to show for the obligation the consent depends on.
+        //
+        // Rule 10 puts the duty on the fiduciary: adopt appropriate measures to ensure the person
+        // identifying as a parent is an identifiable adult, by reference to identity and age
+        // details it reliably holds, or to a virtual token issued by a Digital Locker provider.
+        // What follows makes the platform's acceptance conditional on that being recorded.
+        //
+        // The three triggers below are deliberately one condition and not three. A submission is
+        // making a parental-consent claim if it declares a child, or names PARENTAL_VERIFIED, or
+        // names a GUARDIAN actor — and a surface that does any one of them without the other two
+        // has a different bug, but not one that should let the claim through unevidenced.
+        boolean claimsParentalConsent = isChild
+                || submission.captureMethod() == CaptureMethod.PARENTAL_VERIFIED
+                || submission.actorType() == ActorType.PARENT_GUARDIAN;
+
+        if (claimsParentalConsent && submission.guardianVerification() == null) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.GUARDIAN_VERIFICATION_NOT_EVIDENCED,
+                    "consent was accepted on a child's behalf without recording how the parent or "
+                            + "lawful guardian was verified; DPDP Rule 10 requires due diligence "
+                            + "that the person identifying as a parent is an identifiable adult, "
+                            + "and the record of that diligence is the evidence, not the consent"));
         }
 
         return violations;

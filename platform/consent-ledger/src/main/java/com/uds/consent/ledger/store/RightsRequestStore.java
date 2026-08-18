@@ -3,6 +3,7 @@ package com.uds.consent.ledger.store;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.RightsRequestStatus;
 import com.uds.consent.core.model.RightsRequestType;
+import com.uds.consent.core.model.RightsVerificationMethod;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -30,15 +31,26 @@ public class RightsRequestStore {
         this.jdbc = JdbcClient.create(dataSource);
     }
 
+    /**
+     * @param verification how identity was established before the clock started. Never inferred —
+     *                     {@link RightsVerificationMethod#UNVERIFIED} is a legitimate answer and
+     *                     the common one on the administrative route
+     * @param verifiedAt   when it was established. Must be null exactly when the method is
+     *                     {@code UNVERIFIED}; V30's check constraint holds the two in step
+     */
     public void create(String requestId, String entityId, String subjectId,
                        RightsRequestType type, Jurisdiction jurisdiction, Instant receivedAt,
-                       Instant dueAt, String dueAtBasis, String details) {
+                       Instant dueAt, String dueAtBasis, String details,
+                       RightsVerificationMethod verification, Instant verifiedAt,
+                       String verificationDetail) {
         jdbc.sql("""
                         insert into rights_request (request_id, entity_id, subject_id, request_type,
                                                     jurisdiction, status, received_at, due_at,
-                                                    due_at_basis, details)
+                                                    due_at_basis, details, verification_method,
+                                                    verified_at, verification_detail)
                         values (:requestId, :entityId, :subjectId, :type, :jurisdiction, 'RECEIVED',
-                                :receivedAt, :dueAt, :basis, :details)
+                                :receivedAt, :dueAt, :basis, :details, :verification, :verifiedAt,
+                                :verificationDetail)
                         """)
                 .param("requestId", requestId)
                 .param("entityId", entityId)
@@ -49,6 +61,9 @@ public class RightsRequestStore {
                 .param("dueAt", Timestamp.from(dueAt))
                 .param("basis", dueAtBasis)
                 .param("details", details)
+                .param("verification", verification.name())
+                .param("verifiedAt", verifiedAt == null ? null : Timestamp.from(verifiedAt))
+                .param("verificationDetail", verificationDetail)
                 .update();
     }
 
@@ -166,13 +181,14 @@ public class RightsRequestStore {
     private static final String SELECT = """
             select request_id, entity_id, subject_id, request_type, jurisdiction, status,
                    received_at, due_at, due_at_basis, closed_at, acknowledged_at, assigned_to,
-                   resolution, details
+                   resolution, details, verification_method, verified_at, verification_detail
               from rights_request
             """;
 
     private static Request map(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         Timestamp closedAt = rs.getTimestamp("closed_at");
         Timestamp acknowledgedAt = rs.getTimestamp("acknowledged_at");
+        Timestamp verifiedAt = rs.getTimestamp("verified_at");
         return new Request(
                 rs.getString("request_id"),
                 rs.getString("entity_id"),
@@ -187,18 +203,29 @@ public class RightsRequestStore {
                 acknowledgedAt == null ? null : acknowledgedAt.toInstant(),
                 rs.getString("assigned_to"),
                 rs.getString("resolution"),
-                rs.getString("details"));
+                rs.getString("details"),
+                RightsVerificationMethod.valueOf(rs.getString("verification_method")),
+                verifiedAt == null ? null : verifiedAt.toInstant(),
+                rs.getString("verification_detail"));
     }
 
     /**
      * @param dueAtBasis the rule the deadline came from, in words. Written once at intake and
      *                   never recomputed, so the working can still be shown years later
+     * @param verification what the start of the clock rests on. {@code dueAtBasis} says which rule
+     *                   produced the deadline; this says what produced the instant the rule was
+     *                   applied to. A deadline is only as defensible as both
+     * @param verifiedAt when identity was established, null exactly when it was not
+     * @param verificationDetail how, in the operator's words. Null on the portal path, where the
+     *                   method is the whole answer
      */
     public record Request(String requestId, String entityId, String subjectId,
                           RightsRequestType type, Jurisdiction jurisdiction,
                           RightsRequestStatus status, Instant receivedAt, Instant dueAt,
                           String dueAtBasis, Instant closedAt, Instant acknowledgedAt,
-                          String assignedTo, String resolution, String details) {
+                          String assignedTo, String resolution, String details,
+                          RightsVerificationMethod verification, Instant verifiedAt,
+                          String verificationDetail) {
 
         public boolean overdueAt(Instant asOf) {
             return closedAt == null && dueAt.isBefore(asOf);

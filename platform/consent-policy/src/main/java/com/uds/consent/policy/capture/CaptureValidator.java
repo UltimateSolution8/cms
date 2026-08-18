@@ -28,13 +28,16 @@ public class CaptureValidator {
 
     private final PolicyPorts.PurposeCatalog purposes;
     private final PolicyPorts.ApplicationRegistry applications;
+    private final PolicyPorts.NoticeLookup notices;
     private final Map<Jurisdiction, List<JurisdictionModule>> modules;
 
     public CaptureValidator(PolicyPorts.PurposeCatalog purposes,
                             PolicyPorts.ApplicationRegistry applications,
+                            PolicyPorts.NoticeLookup notices,
                             List<JurisdictionModule> jurisdictionModules) {
         this.purposes = purposes;
         this.applications = applications;
+        this.notices = notices;
         this.modules = new EnumMap<>(Jurisdiction.class);
         for (JurisdictionModule module : jurisdictionModules) {
             this.modules.computeIfAbsent(module.jurisdiction(), k -> new ArrayList<>()).add(module);
@@ -53,6 +56,7 @@ public class CaptureValidator {
         List<PurposeDefinition> resolved = new ArrayList<>();
 
         validateApplication(submission, violations);
+        validateNoticeReference(submission, violations);
 
         for (CaptureSubmission.PurposeChoice choice : submission.choices()) {
             Optional<PurposeDefinition> found = purposes.find(choice.purposeCode());
@@ -173,16 +177,61 @@ public class CaptureValidator {
             return;
         }
 
-        if (submission.entityId() != null && !submission.entityId().equals(application.entityId())) {
+        if (submission.entityId() != null && !application.serves(submission.entityId())) {
+            // Scope rather than ownership. A surface one entity operates on another's behalf —
+            // Athena's dialer placing Denave's calls — captures consent for the entity whose
+            // data principal it is speaking to, not for the entity that runs the server.
             violations.add(CaptureViolation.submission(
                     CaptureViolation.Code.APPLICATION_ENTITY_MISMATCH,
-                    "application '" + applicationId + "' belongs to " + application.entityId()
-                            + " and cannot capture consent for " + submission.entityId()));
+                    "application '" + applicationId + "' is owned by " + application.entityId()
+                            + " and is not authorised to capture consent for "
+                            + submission.entityId()));
         }
     }
 
-    /** Convenience for callers that only need a yes or no. */
-    public boolean isValid(CaptureSubmission submission) {
-        return validate(submission).isEmpty();
+    /**
+     * Checks that the notice a submission cites actually exists, in the language it was served in.
+     *
+     * <p>Until this ran, {@code NOTICE_VERSION_NOT_RECORDED} tested that the field was present and
+     * nothing tested that it was true. A capture could cite version 99 of a notice published only
+     * to version 3, or a Bodo notice with no Bodo translation, and the record would be accepted —
+     * looking, from every angle available afterwards, like sound evidence. The failure surfaces
+     * years later, when somebody asks to be shown what the person read and there is nothing to
+     * show.
+     *
+     * <p><strong>Absence is still not checked here</strong>, deliberately. The jurisdiction modules
+     * decide whether a notice reference is required at all — DPDP does, and says so through
+     * {@code NOTICE_VERSION_NOT_RECORDED}; a legitimate-use capture in another regime may properly
+     * have none. This method's job is narrower: if a reference was given, it must be real.
+     */
+    private void validateNoticeReference(CaptureSubmission submission,
+                                         List<CaptureViolation> violations) {
+        String noticeId = submission.noticeId();
+        Integer version = submission.noticeVersion();
+        if (noticeId == null || noticeId.isBlank() || version == null) {
+            return;
+        }
+
+        if (!notices.exists(noticeId, version)) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.NOTICE_VERSION_UNKNOWN,
+                    "notice '" + noticeId + "' has no version " + version + ". A consent record "
+                            + "citing a notice that was never published cannot be reproduced, "
+                            + "which is the one thing the evidence plane exists to do."));
+            // No point asking about a translation of something that does not exist; a second
+            // violation here would send the integrator after the wrong problem.
+            return;
+        }
+
+        String language = submission.languageTag();
+        if (language != null && !language.isBlank()
+                && !notices.hasTranslation(noticeId, version, language)) {
+            violations.add(CaptureViolation.submission(
+                    CaptureViolation.Code.NOTICE_LANGUAGE_UNAVAILABLE,
+                    "notice '" + noticeId + "' version " + version + " has no " + language
+                            + " translation. The subject was recorded as having been served in a "
+                            + "language the notice does not exist in, so they cannot have read "
+                            + "it."));
+        }
     }
 }

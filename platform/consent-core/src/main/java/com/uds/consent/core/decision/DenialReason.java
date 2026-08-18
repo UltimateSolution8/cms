@@ -73,6 +73,42 @@ public enum DenialReason {
     /** The receiving vendor is not authorised for this purpose or data category. */
     VENDOR_NOT_AUTHORISED,
 
+    /**
+     * The subject opted out recently enough that they may not be re-solicited.
+     *
+     * <p>TRAI's February 2025 amendment sets a ninety-day cooling-off before consent may be
+     * sought again from someone who opted out. A prohibition rather than advice, which is why it
+     * is a denial reason and not an obligation string — an obligation is something the caller is
+     * told to do, and this is something they may not do.
+     */
+    WITHIN_COOLING_OFF_PERIOD,
+
+    /**
+     * A relay arrived claiming to be a Consent Manager that is not registered, or no longer is.
+     *
+     * <p>Recorded as a denial rather than logged, because it is the exact shape of the attack the
+     * Rule 4 framework invites: an inbound channel that writes consent, authenticated by a claim
+     * about who the caller is. A refusal that leaves no evidence is one nobody can count, and the
+     * question after an incident is how many times it was attempted and against whom.
+     */
+    CONSENT_MANAGER_NOT_REGISTERED,
+
+    /**
+     * A relay named a registration the calling credential does not hold.
+     *
+     * <p>Separate from {@link #CONSENT_MANAGER_NOT_REGISTERED} because it is a different event with
+     * a different response. That one is a caller nobody has heard of; this one is a caller the
+     * platform <em>has</em> heard of, authenticated correctly, and which then named somebody else's
+     * Board registration number — a registered Consent Manager writing consent into the ledger under
+     * a competitor's identity, or a leaked credential probing which numbers exist.
+     *
+     * <p>The distinction is invisible to the caller and must stay that way: all three refusals
+     * answer the same opaque 403, or the endpoint becomes a way of enumerating the register. It
+     * exists so that the evidence plane can tell them apart afterwards, which is the only place the
+     * difference matters and the only place anyone is entitled to it.
+     */
+    CONSENT_MANAGER_NOT_BOUND,
+
     /** State was indeterminate and the purpose fails closed. */
     FAIL_CLOSED_DEFAULT,
 

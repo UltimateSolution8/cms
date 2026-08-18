@@ -110,11 +110,30 @@ public class VendorStore {
         }
     }
 
-    public List<String> purposesFor(String vendorId) {
-        return jdbc.sql("select purpose_code from vendor_purpose where vendor_id = :vendorId "
-                        + "order by purpose_code")
-                .param("vendorId", vendorId)
-                .query(String.class)
+    /**
+     * The active vendors authorised for a purpose.
+     *
+     * <p>Purpose to vendors, which is the direction a consent receipt needs. ISO/IEC TS 27560 asks a receipt to name the recipients of the data for each purpose, and the
+     * registry is the only place UDS records who they are — so without this query the receipt could
+     * either stay silent about third parties or assert there are none, and the second would be a
+     * false statement issued to a data principal under the platform's name.
+     *
+     * <p>Active only. A vendor whose authorisation has been withdrawn is not a current recipient,
+     * and listing it on a receipt issued today would misdescribe where the data goes.
+     */
+    public List<Vendor> vendorsForPurpose(String entityId, String purposeCode) {
+        return jdbc.sql("""
+                        select v.vendor_id, v.entity_id, v.name, v.role, v.countries,
+                               v.dpa_reference, v.dpa_signed_at, v.active
+                          from vendor v
+                          join vendor_purpose vp on vp.vendor_id = v.vendor_id
+                         where v.entity_id = :entityId and vp.purpose_code = :purposeCode
+                           and v.active = true
+                         order by v.name
+                        """)
+                .param("entityId", entityId)
+                .param("purposeCode", purposeCode)
+                .query(this::map)
                 .list();
     }
 

@@ -29,11 +29,14 @@ public class IntegritySweeper {
 
     private final LedgerIntegrityVerifier verifier;
     private final PlatformProperties properties;
+    private final SweepLock lock;
     private final AtomicReference<Report> lastReport = new AtomicReference<>(Report.notYetRun());
 
-    public IntegritySweeper(LedgerIntegrityVerifier verifier, PlatformProperties properties) {
+    public IntegritySweeper(LedgerIntegrityVerifier verifier, PlatformProperties properties,
+                            SweepLock lock) {
         this.verifier = verifier;
         this.properties = properties;
+        this.lock = lock;
     }
 
     /** Runs at 02:15 local time, outside the field force's working day. */
@@ -42,7 +45,9 @@ public class IntegritySweeper {
         if (!properties.getSweeper().isIntegrityEnabled()) {
             return;
         }
-        run();
+        // The most expensive job the platform runs — it walks every chain. Running it once per
+        // replica at 02:15 multiplies that cost by the replica count for no additional assurance.
+        lock.runExclusively("integrity", this::run);
     }
 
     /** Runs the sweep and records the outcome. Exposed so an operator can trigger it on demand. */

@@ -37,6 +37,13 @@ jobs:
         working-directory: platform
         run: mvn -B verify
 
+      # The load profile in perf/k6/ is deliberately absent from this workflow, and the reason
+      # changed on 17 August 2026. It used to be recorded as "k6 is not installed", which was simply
+      # untrue and was the stated reason the published 30 ms SLO had never been measured. The real
+      # reason is that the profiles ramp for fifteen minutes against a database seeded with a million
+      # subjects: that is a scheduled exercise on hardware somebody has chosen, not a pull-request
+      # gate, and a version of it small enough to fit in CI would measure nothing anybody quotes.
+      # docs/CAPACITY.md §7 records what running it produced; perf/README.md is the invocation.
       - name: Publish test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -60,3 +67,48 @@ jobs:
       - name: Build service image
         working-directory: platform
         run: docker build -f consent-service/Dockerfile -t uds/consent-service:${{ github.sha }} .
+
+  manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The deployment manifests are the one part of this repository that nothing else checks.
+      # Every other artefact is compiled, migrated or asserted; a typo in a probe path or an
+      # indentation slip in an env block is found by a failed rollout, at the worst moment, in
+      # the environment least able to absorb it.
+      #
+      # kubeconform validates shape against the API schemas. It cannot tell whether the values
+      # are right — a readiness probe pointing at /actuator/health would pass here and would
+      # crash-loop the pod on a broken hash chain — so this is a spelling check, and the
+      # reasoning that makes the values correct is in the manifests' own comments.
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          sudo mv /tmp/kubeconform /usr/local/bin/
+
+      - name: Validate Kubernetes manifests
+        # secrets.example.yaml is excluded on purpose: it is a template of placeholders, and
+        # validating it would only ever assert that a placeholder is a string.
+        run: |
+          kubeconform -strict -summary \
+            -ignore-filename-pattern 'secrets.example.yaml' \
+            deploy/k8s/
+
+      - name: Validate observability manifests
+        # Separate, and with -ignore-missing-schemas, because alerts.yaml is a PrometheusRule —
+        # a CRD, so its schema lives in the cluster rather than in the Kubernetes API catalogue.
+        # Fetching a CRD schema over the network to lint a file would make this job fail for
+        # reasons that have nothing to do with the change under test.
+        #
+        # So this checks the shape kubeconform can check: valid YAML, an apiVersion and a kind.
+        # It does not check the PromQL, which nothing here can — a rule whose expression is
+        # nonsense passes this and fails silently in Prometheus by never firing, which is the
+        # failure mode alert rules have and the reason each one in that file carries a comment
+        # saying what it is for.
+        run: |
+          kubeconform -summary -ignore-missing-schemas deploy/observability/

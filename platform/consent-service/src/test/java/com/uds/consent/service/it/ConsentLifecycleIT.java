@@ -332,6 +332,45 @@ class ConsentLifecycleIT extends PostgresIntegrationTest {
                 hash)).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("the caller and the recipient are checked against the real registries")
+    void applicationAndVendorAreEnforcedAgainstTheDatabase() {
+        // The golden suite proves the gates in isolation. What this proves is that they are wired
+        // to the registries that actually hold the answers — applicationId and vendorId travelled
+        // from the wire into DecisionRequest and were read by nothing, so a stand-in passing is
+        // not evidence that the seeded rows are consulted.
+        String subject = newSubject();
+        capture.capture(submission(subject,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("MKT_OUTBOUND_CALL")));
+
+        assertThat(decide(subject, "MKT_OUTBOUND_CALL", Channel.VOICE_CALL).isAllowed()).isTrue();
+
+        // MATRIX_BGV is a real seeded surface belonging to Matrix, with no scope over Denave. A
+        // Denave subject asked about through it is the shape a leaked credential takes, and it is
+        // refused on the scope check rather than on the consent record.
+        DecisionResponse crossEntity = policy.evaluate(new DecisionRequest(ENTITY, subject,
+                "MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN, "MATRIX_BGV",
+                NOW.plus(2, ChronoUnit.HOURS), null, null, null, Map.of()));
+        assertThat(crossEntity.isAllowed()).isFalse();
+        assertThat(crossEntity.reason()).isEqualTo(DenialReason.APPLICATION_NOT_AUTHORISED);
+
+        // Athena's dialer is owned by Athena and scoped to Denave by V7, which is the arrangement
+        // the registry's own description records. It must pass, or the platform blocks the one
+        // system whose entire function is to pre-flight Denave's calls.
+        DecisionResponse sharedSurface = policy.evaluate(new DecisionRequest(ENTITY, subject,
+                "MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN, "ATHENA_DIALER",
+                NOW.plus(2, ChronoUnit.HOURS), null, null, null, Map.of()));
+        assertThat(sharedSurface.isAllowed()).isTrue();
+
+        // No vendor_purpose row exists for this processor, so its agreement does not cover the
+        // purpose whatever the subject agreed to.
+        DecisionResponse unauthorisedVendor = policy.evaluate(new DecisionRequest(ENTITY, subject,
+                "MKT_OUTBOUND_CALL", Channel.VOICE_CALL, Jurisdiction.IN, APP,
+                NOW.plus(2, ChronoUnit.HOURS), null, null, "VENDOR_WITH_NO_DPA", Map.of()));
+        assertThat(unauthorisedVendor.isAllowed()).isFalse();
+        assertThat(unauthorisedVendor.reason()).isEqualTo(DenialReason.VENDOR_NOT_AUTHORISED);
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private DecisionResponse decide(String subjectId, String purposeCode, Channel channel) {

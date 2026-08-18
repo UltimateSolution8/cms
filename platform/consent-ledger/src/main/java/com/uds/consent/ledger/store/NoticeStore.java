@@ -9,12 +9,18 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Reads published notices.
+ * Reads and publishes notices.
  *
  * <p>Notice versions are immutable once published, enforced by trigger. The reason is narrow and
  * important: every consent event points at the exact notice version rendered, and the group must
  * be able to reproduce in 2031 precisely what a person read in 2026. A notice that can be edited
  * in place destroys that, quietly and irreversibly.
+ *
+ * <p><strong>The write methods here only ever insert.</strong> That is what makes them compatible
+ * with the immutability guarantee rather than a hole in it: {@code V2__append_only_guards.sql}
+ * revokes UPDATE, DELETE and TRUNCATE on {@code notice_version} and {@code notice_translation} from
+ * the application role, and leaves INSERT alone. Adding Bodo to a version published last year
+ * appends a row; it does not rewrite what anybody was shown.
  */
 @Repository
 public class NoticeStore {
@@ -165,6 +171,93 @@ public class NoticeStore {
                 .query((rs, n) -> new Coverage(rs.getString("notice_id"), rs.getInt("version"),
                         rs.getInt("required"), rs.getInt("present")))
                 .list();
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Publishing
+    // -------------------------------------------------------------------------------------
+
+    /** Whether the notice itself is registered. A version cannot be published against nothing. */
+    public boolean noticeExists(String noticeId) {
+        return jdbc.sql("select 1 from notice where notice_id = :noticeId")
+                .param("noticeId", noticeId)
+                .query(Integer.class)
+                .optional()
+                .isPresent();
+    }
+
+    /** The entity a notice belongs to, so an administrative action can be filed against it. */
+    public Optional<String> entityOf(String noticeId) {
+        return jdbc.sql("select entity_id from notice where notice_id = :noticeId")
+                .param("noticeId", noticeId)
+                .query(String.class)
+                .optional();
+    }
+
+    /**
+     * The version number a new publish must take: one past the highest that exists.
+     *
+     * <p>Returns 1 for a notice that has never been published. Never accepts a caller's number —
+     * see {@code PublishingService} for why.
+     */
+    public int nextVersion(String noticeId) {
+        return jdbc.sql("select coalesce(max(version), 0) + 1 from notice_version "
+                        + "where notice_id = :noticeId")
+                .param("noticeId", noticeId)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * Appends a notice version and returns it as stored.
+     *
+     * <p>Insert only. The row is unreachable by UPDATE or DELETE from the application role from the
+     * moment it lands, which is what lets legal publish through an API without weakening the
+     * guarantee that what a person read in 2026 can be reproduced in 2031.
+     */
+    public NoticeVersion publishVersion(String noticeId, int version, String jurisdiction,
+                                        boolean materialChange, String withdrawalUri,
+                                        String rightsUri, String grievanceUri, String publishedBy) {
+        return jdbc.sql("""
+                        insert into notice_version (notice_id, version, jurisdiction,
+                                                    material_change, withdrawal_uri, rights_uri,
+                                                    grievance_uri, published_by)
+                        values (:noticeId, :version, :jurisdiction, :materialChange, :withdrawalUri,
+                                :rightsUri, :grievanceUri, :publishedBy)
+                        returning id, notice_id, version, jurisdiction, material_change,
+                                  withdrawal_uri, rights_uri, grievance_uri, published_at
+                        """)
+                .param("noticeId", noticeId)
+                .param("version", version)
+                .param("jurisdiction", jurisdiction)
+                .param("materialChange", materialChange)
+                .param("withdrawalUri", withdrawalUri)
+                .param("rightsUri", rightsUri)
+                .param("grievanceUri", grievanceUri)
+                .param("publishedBy", publishedBy)
+                .query(NoticeStore::mapVersion)
+                .single();
+    }
+
+    /**
+     * Adds a translation to a published version.
+     *
+     * <p>The one write that looks like it edits history and does not. A version published in
+     * English in March and given its Bodo translation in September is the same version — the text
+     * anybody was shown is untouched, and a language that was missing is now present. Replacing an
+     * existing translation is refused by the primary key rather than silently overwritten, because
+     * a subject who read the old Bodo text needs it to still exist.
+     */
+    public void addTranslation(long noticeVersionId, String languageTag, String title, String body) {
+        jdbc.sql("""
+                        insert into notice_translation (notice_version_id, language_tag, title, body)
+                        values (:id, :lang, :title, :body)
+                        """)
+                .param("id", noticeVersionId)
+                .param("lang", languageTag)
+                .param("title", title)
+                .param("body", body)
+                .update();
     }
 
     private static NoticeVersion mapVersion(java.sql.ResultSet rs, int rowNum)

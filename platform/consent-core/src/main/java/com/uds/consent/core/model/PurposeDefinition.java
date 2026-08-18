@@ -20,6 +20,8 @@ import java.util.Set;
  * @param description           what is actually done with the data, in plain language
  * @param legalBases            basis per jurisdiction; absent means the purpose is not permitted
  * @param dataCategories        codes of the data categories this purpose touches
+ * @param sensitiveCategories   the subset of {@code dataCategories} the registry marks sensitive
+ * @param biometricCategories   the subset of {@code dataCategories} the registry marks biometric
  * @param channels              channels this purpose may use
  * @param expiryPolicy          how consent for this purpose lapses
  * @param expiryDays            window for {@link ExpiryPolicy#FIXED_DAYS}
@@ -36,6 +38,8 @@ public record PurposeDefinition(
         String description,
         Map<Jurisdiction, LegalBasis> legalBases,
         Set<String> dataCategories,
+        Set<String> sensitiveCategories,
+        Set<String> biometricCategories,
         Set<Channel> channels,
         ExpiryPolicy expiryPolicy,
         Integer expiryDays,
@@ -51,7 +55,25 @@ public record PurposeDefinition(
         Objects.requireNonNull(failureBehavior, "failureBehavior");
         legalBases = legalBases == null ? Map.of() : Map.copyOf(legalBases);
         dataCategories = dataCategories == null ? Set.of() : Set.copyOf(dataCategories);
+        sensitiveCategories = sensitiveCategories == null ? Set.of() : Set.copyOf(sensitiveCategories);
+        biometricCategories = biometricCategories == null ? Set.of() : Set.copyOf(biometricCategories);
         channels = channels == null ? Set.of() : Set.copyOf(channels);
+    }
+
+    /**
+     * Whether this purpose touches any category the registry marks sensitive.
+     *
+     * <p>Read from the registry rather than inferred from the shape of a category code. A naming
+     * convention works until the first category somebody names differently, and the failure is
+     * silent: sensitive data handled as ordinary data, with nothing to notice it by.
+     */
+    public boolean touchesSensitiveData() {
+        return !sensitiveCategories.isEmpty();
+    }
+
+    /** Whether this purpose touches any category the registry marks biometric. */
+    public boolean touchesBiometricData() {
+        return !biometricCategories.isEmpty();
     }
 
     /**

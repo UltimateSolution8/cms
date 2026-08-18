@@ -38,12 +38,15 @@ public class RightsSlaSweeper {
 
     private final RightsRequestStore store;
     private final PlatformProperties properties;
+    private final SweepLock lock;
 
     private volatile Report lastReport = new Report(Instant.EPOCH, 0, 0, List.of());
 
-    public RightsSlaSweeper(RightsRequestStore store, PlatformProperties properties) {
+    public RightsSlaSweeper(RightsRequestStore store, PlatformProperties properties,
+                            SweepLock lock) {
         this.store = store;
         this.properties = properties;
+        this.lock = lock;
     }
 
     @Scheduled(fixedDelayString = "${uds.consent.sweeper.rights-sla-interval:PT15M}")
@@ -51,7 +54,10 @@ public class RightsSlaSweeper {
         if (!properties.getSweeper().isRightsSlaEnabled()) {
             return;
         }
-        run(Instant.now());
+        // Locked because this one pages people. The same breach reported once per replica, every
+        // fifteen minutes, is how a real alert gets filtered into a folder nobody opens — which is
+        // precisely the failure this sweeper exists to prevent.
+        lock.runExclusively("rights-sla", () -> run(Instant.now()));
     }
 
     /**

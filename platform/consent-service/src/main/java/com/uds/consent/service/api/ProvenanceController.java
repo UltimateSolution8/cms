@@ -82,7 +82,7 @@ public class ProvenanceController {
                 .map(row -> row.toSubmission(req.entityId()))
                 .toList();
         return provenance.recordBatch(req.entityId(), submissions, req.batchRef(),
-                actorOf(authentication));
+                administratorOf(authentication));
     }
 
     /**
@@ -109,8 +109,34 @@ public class ProvenanceController {
         return provenance.summariseBySource(entityId);
     }
 
+    /**
+     * The caller, for routes a machine holds.
+     *
+     * <p>Deliberately the credential and not the {@code X-UDS-Actor} header. A dialer scrubbing a
+     * campaign list, a website recording an opt-out and a CRM asserting provenance are systems,
+     * not people, and there is no human behind the call to name. Recording the credential is the
+     * accurate answer — and honouring a header on these routes would be worse than useless, since
+     * it would let any capture surface write an arbitrary name into evidence about who did
+     * something no person did.
+     *
+     * <p>The administrative routes in this controller use {@link #administratorOf} instead, which
+     * requires the header. The split follows the authorisation model rather than the file: this
+     * class serves both machine and console callers, and attribution should mean different things
+     * for each.
+     */
     private static String actorOf(Authentication authentication) {
         return authentication == null ? "anonymous" : authentication.getName();
+    }
+
+    /**
+     * The person taking an administrative action, refusing when the caller did not say who.
+     *
+     * <p>Used on the ADMIN-only routes here. {@code compliance-console} is one credential held by
+     * a team, so an append-only audit row naming it is permanently ambiguous about who authorised
+     * the action — which is the one question an audit trail exists to answer.
+     */
+    private static String administratorOf(Authentication authentication) {
+        return Actor.required(authentication).actorId();
     }
 
     /**

@@ -102,6 +102,26 @@ public class ProcessingActivityStore {
     }
 
     /**
+     * The activities an entity has recorded for a purpose.
+     *
+     * <p>Read when a consent receipt is built. TS 27560 asks the receipt to state, per purpose, how
+     * long the data is kept and where it goes — facts the RoPA already holds and which had no route
+     * to the artefact the subject is given.
+     *
+     * <p>Returns a list rather than an optional because nothing stops an entity describing the same
+     * purpose in two activities (a call centre and a campaign platform, say). A receipt that showed
+     * only the first would be arbitrary; the caller merges them.
+     */
+    public List<Activity> findForPurpose(String entityId, String purposeCode) {
+        return jdbc.sql(SELECT + " where entity_id = :entityId and purpose_code = :purposeCode "
+                        + "order by name")
+                .param("entityId", entityId)
+                .param("purposeCode", purposeCode)
+                .query(this::map)
+                .list();
+    }
+
+    /**
      * Activities with no documented retention rule.
      *
      * <p>DPDP requires erasure once the purpose is served. An activity that cannot say how long it
@@ -122,6 +142,48 @@ public class ProcessingActivityStore {
     public List<Activity> findCrossBorder(String entityId) {
         return jdbc.sql(SELECT + " where entity_id = :entityId "
                         + "and jsonb_array_length(cross_border_countries) > 0 order by name")
+                .param("entityId", entityId)
+                .query(this::map)
+                .list();
+    }
+
+    /**
+     * Activities transferring a category the Government has restricted from leaving India.
+     *
+     * <p>DPDP <strong>Rule 13(4)</strong> lets the Central Government, on the recommendation of the
+     * committee constituted under Rule 13(5), name categories of personal data that a Significant
+     * Data Fiduciary may not transfer outside India at all. Unlike every other cross-border
+     * question, this one has no lawful-transfer answer: the category may not go, and an activity
+     * sending it is not a transfer to document but one to stop.
+     *
+     * <p>Not to be confused with two neighbouring rules. <strong>Rule 15</strong> is the general
+     * restriction on transfer outside India and binds <em>every</em> Data Fiduciary, not only
+     * Significant ones; {@link #findCrossBorder} is the report for that. <strong>Rule 14</strong>
+     * is about rights, publication and grievance redressal and has nothing to do with transfers —
+     * it was miscited here until V21.
+     *
+     * <p><strong>Scope.</strong> Rule 13(4) reaches "the personal data and the traffic data
+     * pertaining to its flow". This query covers the personal data half only, by data category.
+     * Traffic data — which carrier a message went through, when, to where — is not a data category
+     * and is not held by this platform at all: it holds consent evidence, not message logs. That is
+     * a boundary rather than a gap, and it is stated so nobody reads this method as covering it.
+     *
+     * <p><strong>Returns nothing today, and that is the point.</strong> No categories are notified
+     * as at August 2026 — checked, not assumed — so {@code data_category.transfer_restricted} is
+     * false on every row and this query is empty. It exists now so that honouring a notification
+     * is an update statement against one column rather than a release, and so that the report
+     * reading it is already in production and already tested when the notification lands.
+     */
+    public List<Activity> findRestrictedCrossBorder(String entityId) {
+        return jdbc.sql(SELECT + """
+                         where entity_id = :entityId
+                           and jsonb_array_length(cross_border_countries) > 0
+                           and exists (select 1 from data_category dc
+                                        where dc.transfer_restricted = true
+                                          and jsonb_exists(processing_activity.data_categories,
+                                                           dc.code))
+                         order by name
+                        """)
                 .param("entityId", entityId)
                 .query(this::map)
                 .list();
