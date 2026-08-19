@@ -176,7 +176,17 @@ class RightsFulfilmentIT extends PostgresIntegrationTest {
         assertThat(response.getStatusCode())
                 .withFailMessage("rights intake fixture failed: %s", response.getBody())
                 .isEqualTo(HttpStatus.OK);
-        return (String) response.getBody().get("requestId");
+        String requestId = (String) response.getBody().get("requestId");
+
+        // Phase 18: closing a disclosing or destructive right on an UNVERIFIED request is refused
+        // before the fulfilment register is consulted. This suite is about the fulfilment gate, so
+        // it clears the verification one first — which is also the real operator sequence, and the
+        // reason both refusals had to be distinguishable in the response body.
+        assertThat(admin().postForEntity("/v1/rights/" + requestId + "/verification", Map.of(
+                        "method", "OPERATOR_ASSERTED",
+                        "detail", "call-back to the number on file"), String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+        return requestId;
     }
 
     private void recordAction(String requestId, String systemCode, String actionType,

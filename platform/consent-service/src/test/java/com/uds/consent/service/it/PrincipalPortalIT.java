@@ -3,7 +3,6 @@ package com.uds.consent.service.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.uds.consent.core.model.RightsVerificationMethod;
-import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -41,10 +41,10 @@ class PrincipalPortalIT extends PostgresIntegrationTest {
     private TestRestTemplate rest;
 
     @Autowired
-    private OutboxStore outbox;
+    private RightsRequestStore requests;
 
     @Autowired
-    private RightsRequestStore requests;
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Test
     @DisplayName("a known and an unknown identifier produce byte-identical responses")
@@ -248,15 +248,25 @@ class PrincipalPortalIT extends PostgresIntegrationTest {
         return outboxPayload(reference).get("token").asText();
     }
 
+    /**
+     * Queried by reference, not scanned out of {@code fetchUnpublished(500)}.
+     *
+     * <p>The scan was order-dependent and passed for as long as the suites that ran first left
+     * fewer than five hundred messages unpublished. Adding tests elsewhere in the tree pushed this
+     * one's message past the window and it failed claiming the platform had enqueued nothing —
+     * the same shape as the {@code WebhookDeliveryIT} backlog defect Phase 17 found, and the same
+     * lesson: a test that depends on how much ran before it degrades silently.
+     */
     private JsonNode outboxPayload(String reference) throws Exception {
-        for (OutboxStore.PendingMessage message : outbox.fetchUnpublished(500)) {
-            if ("rights.verification.requested".equals(message.topic())
-                    && reference.equals(message.eventKey())) {
-                return JSON.readTree(message.payload());
-            }
+        List<String> payloads = jdbc.queryForList(
+                "select payload::text from event_outbox "
+                        + "where topic = 'rights.verification.requested' and event_key = ?",
+                String.class, reference);
+        if (payloads.isEmpty()) {
+            throw new AssertionError("no verification message was enqueued for " + reference
+                    + "; the principal would never receive a code and the request would expire");
         }
-        throw new AssertionError("no verification message was enqueued for " + reference
-                + "; the principal would never receive a code and the request would expire");
+        return JSON.readTree(payloads.get(0));
     }
 
     private void captureConsentFor(String identifier) {

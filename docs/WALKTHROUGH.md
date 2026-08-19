@@ -595,7 +595,7 @@ walkthrough that is not re-run is a screenshot; one that is re-run each release 
 
 ---
 
-## 10. Propagation — who was told, and who was not
+## 15. Propagation — who was told, and who was not
 
 Phase 17. Everything above ends at the ledger; this is the half that says whether a withdrawal
 reached anybody. Run it after §8, against the same Compose stack.
@@ -650,3 +650,134 @@ curl -sS -u compliance-console:$ADMIN_PASSWORD -X PUT \
 **The gap row does not disappear, and that is correct.** It is append-only evidence that on that day
 the obligation was unmet. One row per system per day: it names the first principal and event type
 observed that day as an exemplar, not the whole set.
+
+---
+
+## 16. Identity before disclosure, and a notice that does not erase a grant
+
+Phase 18. Two behaviours, run by hand against the Compose stack on **19 August 2026**; the output
+below is what the platform actually returned, trimmed, not an illustration.
+
+### 16.1 A disclosing right cannot be closed on an identity nobody recorded
+
+**File one the way an operator takes it over the telephone** — no identity established, which is the
+honest default and deliberately not refused at intake:
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD -X POST \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: walkthrough@uds' \
+  -d '{"entityId":"DENAVE_IN","identifierType":"EMAIL","identifierValue":"asha.rao@example.in",
+       "type":"ACCESS","jurisdiction":"IN","details":"filed by telephone"}' \
+  http://localhost:8080/v1/rights
+```
+
+```json
+{ "requestId": "RR-7d420503-…", "type": "ACCESS", "status": "RECEIVED",
+  "dueAt": "2026-09-17T22:42:07Z", "verification": "UNVERIFIED" }
+```
+
+The clock is running — Art. 12(2) forbids refusing to *act* — and `verification` says plainly that
+nobody has been established as the person asking.
+
+**Now try to close it.** `409`:
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD -X PATCH \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: walkthrough@uds' \
+  -d '{"status":"FULFILLED","resolution":"file exported"}' \
+  http://localhost:8080/v1/rights/$REQUEST_ID
+```
+
+```json
+{ "title": "Identity not verified", "status": 409, "requestType": "ACCESS",
+  "detail": "… is a ACCESS request and cannot be closed as FULFILLED while its verification_method
+             is UNVERIFIED: fulfilling it discloses or irreversibly changes this person's data, and
+             nothing on the record says who was established to be asking. Record what was checked at
+             POST /v1/rights/RR-…/verification, then close it. Withdrawals, opt-outs and grievances
+             are deliberately not gated this way." }
+```
+
+**Read the refusal, not the status code.** Both this and the fulfilment-evidence gate answer `409`,
+and an operator told the wrong one fixes the wrong thing — which is why the message names
+*verification* and the route that clears it.
+
+**Record what was checked.** `X-UDS-Actor` is required: this route asserts that a *person* checked,
+and a shared console credential cannot answer "who". Sent without it, `400`:
+
+> `X-UDS-Actor is required on administrative changes. Send the identity of the person taking the
+> action — a username or work email, not a team name and not the client id.`
+
+```bash
+curl -sS -u compliance-console:$ADMIN_PASSWORD -X POST \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: r.menon@uds' \
+  -d '{"method":"OPERATOR_ASSERTED",
+       "detail":"call-back to the mobile already on file; DOB confirmed"}' \
+  http://localhost:8080/v1/rights/$REQUEST_ID/verification
+```
+
+```json
+{ "verification": "OPERATOR_ASSERTED", "verifiedAt": "2026-08-18T22:42:21Z",
+  "verificationDetail": "call-back to the mobile already on file; DOB confirmed" }
+```
+
+**A second attempt is refused, and the first record stands.** `409`:
+
+> `… already records a verification of OPERATOR_ASSERTED, and verification is written once. It is
+> evidence about what a person did, so it is not overwritten.`
+
+The `PATCH` to `FULFILLED` then succeeds, and the closed request still carries the sentence the
+operator wrote. **What the platform cannot check is the sentence itself** — what an adequate check
+must involve is UDS's to publish, `REGULATORY_HANDOFF.md` §8.6, and a gate with no standard behind
+its field is satisfied by typing the word "verified".
+
+**And a withdrawal is deliberately not gated.** File a `CONSENT_WITHDRAWAL`, leave it `UNVERIFIED`,
+and it closes `200`:
+
+```json
+{ "type": "CONSENT_WITHDRAWAL", "status": "FULFILLED", "verification": "UNVERIFIED" }
+```
+
+Consent is given by a ticked box with no identity check at all; demanding one to withdraw fails
+DPDP s.6(4)'s and GDPR Art. 7(3)'s *comparable ease* on its face. `OPT_OUT_OF_SALE` and `GRIEVANCE`
+are ungated for the same family of reasons. **Applying the gate uniformly is the wrong turn here.**
+
+**The gate is on the claim, not the act.** `GET /v1/admin/evidence/subject/**` is unlinked from any
+rights request, so a file can still be disclosed without one ever being opened. `ROADMAP.md` carries
+that as the open item it is.
+
+### 16.2 Re-serving a notice does not erase the grant
+
+Capture a consent for `MKT_OUTBOUND_CALL`, then serve the notice again for the same purpose — a
+Hindi re-serve, which a capture surface does routinely:
+
+```bash
+curl -sS -u denave-web:dev -X POST http://localhost:8080/v1/consent/notice-served \
+  -H 'Content-Type: application/json' -d '{
+  "entityId":"DENAVE_IN","subjectId":"walkthrough-p18-001","purposeCode":"MKT_OUTBOUND_CALL",
+  "noticeId":"NOTICE_DENAVE_B2B","noticeVersion":1,"languageTag":"hi","jurisdiction":"IN",
+  "applicationId":"DENAVE_WEB","idempotencyKey":"p18-notice-2"}'
+```
+
+The event is written and its `status` is `NOT_ASKED` — correct, because a notice asserts nothing
+about agreement. Current state, before and after, is unchanged:
+
+```json
+[{ "purposeCode":"MKT_OUTBOUND_CALL", "purposeVersion":1, "status":"GRANTED",
+   "legalBasis":"CONSENT", "grantedAt":"2026-08-18T22:42:41Z" }]
+```
+
+and the dialer's gate still allows:
+
+```json
+{ "outcome":"ALLOW", "reason":"NONE", "legalBasis":"CONSENT", "purposeVersion":1 }
+```
+
+**Before Phase 18 both of those read differently** — the projection was overwritten to `NOT_ASKED`
+and the decision denied, with the grant still in the ledger and every hash valid. The overwrite also
+destroyed `expiresAt`, `captureMethod` and `channel`, which for a `TRAI_TRANSACTIONAL_7D` purpose
+silently removed the seven-day lapse the TCCCPR module exists to enforce. What the notice *does*
+update is the notice: `noticeId`, `noticeVersion` and `languageTag` move forward, so a receipt names
+the notice the person was most recently shown.
+
+Serve a notice for a purpose with no artefact and the behaviour is unchanged — a `NOT_ASKED`
+artefact is created, which is the s.7(i) workforce path the route exists for.

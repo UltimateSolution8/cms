@@ -561,12 +561,28 @@ DenCRM and the HRMS rather than a task on this platform.
 
 ### 8.6 What `OPERATOR_ASSERTED` has to mean, before a console offers the field
 
-**Owner: UDS compliance. Blocks nothing today, and that is the risk.**
+**Owner: UDS compliance. Since Phase 18 it blocks the closure of a disclosing right, and the
+absence of a published standard is now the risk rather than the absence of a gate.**
 
 `POST /v1/rights` accepts a `verifiedAs` note. Supplying one records the request as
-`OPERATOR_ASSERTED`; leaving it blank records `UNVERIFIED`. Neither refuses anything — the label is
-deliberately not a gate, because parking requests outside the statutory clock until somebody fills
-in a field produces exactly the outcome Rule 14(3) penalises.
+`OPERATOR_ASSERTED`; leaving it blank records `UNVERIFIED`. **Neither refuses anything at intake**,
+deliberately: parking requests outside the statutory clock until somebody fills in a field produces
+exactly the outcome Rule 14(3) penalises, and GDPR Art. 12(2) forbids refusing to act on a request
+except where the principal cannot be identified.
+
+**Phase 18 changed the other end, and it makes this section more urgent rather than less.** A
+disclosing or destructive right — access, portability, erasure, correction, completion, nomination —
+can no longer be recorded as `FULFILLED` while the row reads `UNVERIFIED`. Withdrawals, opt-outs and
+grievances are deliberately not gated. Verification can now be recorded after intake, at
+`POST /v1/rights/{requestId}/verification`, which is what makes the gate a prompt rather than an
+obstruction.
+
+⚠️ **So an operator will now be asked for this field at the moment they most want the request
+closed, and there is still no published standard for what it has to mean.** That is the failure
+shape this programme has already had once, on a different field: the backdate bound refused a value
+and the workaround was to file with today's date, which destroyed the provenance the bound existed
+to protect. A gate with no standard behind the field it demands is a gate satisfied by typing
+*"verified"*. **This decision is now blocking in practice, not merely in principle.**
 
 Two things the platform does and does not do, stated so the boundary is not assumed:
 

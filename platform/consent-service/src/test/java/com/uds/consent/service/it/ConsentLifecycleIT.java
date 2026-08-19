@@ -371,6 +371,139 @@ class ConsentLifecycleIT extends PostgresIntegrationTest {
         assertThat(unauthorisedVendor.reason()).isEqualTo(DenialReason.VENDOR_NOT_AUTHORISED);
     }
 
+    @Test
+    @DisplayName("re-serving a notice records that the person was told, and leaves their consent alone")
+    void noticeServedDoesNotEraseAGrant() {
+        // The defect this asserts against: NOTICE_SERVED resolves to NOT_ASKED, and the projector
+        // let that overwrite a live grant once the clock-skew window had passed. consent_artefact
+        // is what the dialer reads, so a capture surface re-serving a notice silently revoked a
+        // consent the person had given — with the grant still in the ledger and every hash valid.
+        //
+        // The status is only the symptom. project() takes expiry, capture method and channel off
+        // the event, and a notice carries none of them, so the overwrite also removed the seven-day
+        // TRAI window this purpose exists to enforce. All four are asserted.
+        String subject = newSubject();
+        Instant acted = NOW.minus(6, ChronoUnit.HOURS);
+
+        capture.capture(submission(subject, acted, "txn-" + subject, Channel.SMS,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("TXN_SERVICE_SMS")));
+
+        ConsentArtefact granted = ledger.currentState(ENTITY, subject, "TXN_SERVICE_SMS");
+        assertThat(granted.status()).isEqualTo(ConsentStatus.GRANTED);
+
+        capture.recordNoticeServed(ENTITY, subject, "TXN_SERVICE_SMS", NOTICE, 1, "en",
+                Jurisdiction.IN, APP, NOW.plus(1, ChronoUnit.HOURS), "notice-" + subject);
+
+        ConsentArtefact afterNotice = ledger.currentState(ENTITY, subject, "TXN_SERVICE_SMS");
+        assertThat(afterNotice.status()).isEqualTo(ConsentStatus.GRANTED);
+        assertThat(afterNotice.purposeVersion()).isEqualTo(granted.purposeVersion());
+        assertThat(afterNotice.expiresAt()).isEqualTo(acted.plus(7, ChronoUnit.DAYS));
+        assertThat(afterNotice.captureMethod()).isEqualTo(granted.captureMethod());
+        assertThat(afterNotice.channel()).isEqualTo(granted.channel());
+        assertThat(afterNotice.grantedAt()).isEqualTo(granted.grantedAt());
+
+        // And the one thing a notice does establish moves: the chain head advances to it, so the
+        // record shows when the person was most recently told.
+        assertThat(afterNotice.lastEventAt()).isEqualTo(NOW.plus(1, ChronoUnit.HOURS));
+        assertThat(afterNotice.sequenceNumber()).isGreaterThan(granted.sequenceNumber());
+
+        // The property the dialer actually depends on.
+        assertThat(decideAt(subject, "TXN_SERVICE_SMS", Channel.SMS,
+                acted.plus(1, ChronoUnit.DAYS)).isAllowed()).isTrue();
+
+        // Both facts survive as evidence: they agreed, and they were told again afterwards.
+        assertThat(ledger.history(ENTITY, subject, "TXN_SERVICE_SMS")).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("the fan-out tells downstream systems the grant stands, not that it was not asked")
+    void noticeServedPublishesTheProjectedStatus() {
+        // Found by qa-verifier against Phase 18: the projector was fixed and the wire was not.
+        // ConsentLedger published event.resultingStatus(), which is NOT_ASKED for NOTICE_SERVED,
+        // with restrictive=true beside it. A consumer materialising state from the payload — which
+        // is what DenCRM does — would have marked a consenting lead not-asked and stopped calling,
+        // while consent_artefact said GRANTED. The evidence plane and the published state
+        // disagreeing is worse than the projection defect, because neither side looks wrong alone.
+        String subject = newSubject();
+        capture.capture(submission(subject,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("MKT_OUTBOUND_CALL")));
+
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", NOTICE, 1, "en",
+                Jurisdiction.IN, APP, NOW.plus(1, ChronoUnit.HOURS), "notice-wire-" + subject);
+
+        // Read the fields out of the jsonb, never the serialised text: PostgreSQL reformats jsonb
+        // on read, so an assertion on the string is about the database's whitespace rather than
+        // about the platform's fact. That mistake is already recorded once in this programme.
+        Map<String, Object> published = jdbc.queryForMap(
+                "select payload->>'status' as status, payload->>'restrictive' as restrictive "
+                        + "from event_outbox where event_key = ? "
+                        + "and payload->>'eventType' = 'NOTICE_SERVED'",
+                ENTITY + '|' + subject);
+
+        assertThat(published.get("status"))
+                .as("the status on the wire is the state after the event, not the event's own")
+                .isEqualTo("GRANTED");
+        assertThat(published.get("restrictive"))
+                .as("a notice restricts nothing, so it must not ask consumers to stop processing")
+                .isEqualTo("false");
+    }
+
+    @Test
+    @DisplayName("a notice served where nothing was asked still records NOT_ASKED, for s.7(i)")
+    void noticeServedWithNoArtefactIsUnchanged() {
+        // Roughly 76,000 workforce records need this rather than a consent record: the obligation
+        // under DPDP s.7(i) is to show the person was told, and this is the evidence of it. The
+        // Phase 18 change must not touch this path.
+        String subject = newSubject();
+
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", NOTICE, 1, "en",
+                Jurisdiction.IN, APP, NOW, "notice-only-" + subject);
+
+        ConsentArtefact state = ledger.currentState(ENTITY, subject, "MKT_OUTBOUND_CALL");
+        assertThat(state.status()).isEqualTo(ConsentStatus.NOT_ASKED);
+        assertThat(state.noticeId()).isEqualTo(NOTICE);
+    }
+
+    @Test
+    @DisplayName("a notice inside the clock-skew window of a grant does not make it CONFLICTED")
+    void noticeServedNeverConflicts() {
+        // CONFLICTED denies, and it exists for two surfaces disagreeing about an outcome. A notice
+        // asserts no outcome, so it disagrees with nothing — and a notice served a minute after a
+        // grant must not deny the consent that grant recorded.
+        String subject = newSubject();
+
+        capture.capture(submission(subject, NOW,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("MKT_OUTBOUND_CALL")));
+
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", NOTICE, 1, "en",
+                Jurisdiction.IN, APP, NOW.plus(1, ChronoUnit.MINUTES), "skew-" + subject);
+
+        assertThat(ledger.currentState(ENTITY, subject, "MKT_OUTBOUND_CALL").status())
+                .isEqualTo(ConsentStatus.GRANTED);
+        assertThat(decide(subject, "MKT_OUTBOUND_CALL", Channel.VOICE_CALL).isAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a notice older than the artefact does not overwrite the newer notice on it")
+    void staleNoticeIsIgnored() {
+        // The ordering rule everything else in the projector obeys, applied here too: a notice that
+        // arrives behind a newer one is evidence in the ledger and does not change current state.
+        String subject = newSubject();
+
+        capture.capture(submission(subject, NOW,
+                CaptureSubmission.PurposeChoice.acceptedSeparately("MKT_OUTBOUND_CALL")));
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", "NOTICE_UDS_WORKFORCE", 1, "en",
+                Jurisdiction.IN, APP, NOW.plus(2, ChronoUnit.HOURS), "recent-" + subject);
+
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", NOTICE, 1, "en",
+                Jurisdiction.IN, APP, NOW.plus(1, ChronoUnit.HOURS), "stale-" + subject);
+
+        ConsentArtefact state = ledger.currentState(ENTITY, subject, "MKT_OUTBOUND_CALL");
+        assertThat(state.noticeId()).isEqualTo("NOTICE_UDS_WORKFORCE");
+        assertThat(state.lastEventAt()).isEqualTo(NOW.plus(2, ChronoUnit.HOURS));
+        assertThat(ledger.history(ENTITY, subject, "MKT_OUTBOUND_CALL")).hasSize(3);
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private DecisionResponse decide(String subjectId, String purposeCode, Channel channel) {

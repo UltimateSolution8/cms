@@ -72,6 +72,39 @@ public class ArtefactProjector {
         int conflicts = current.sequenceNumber() < 0 ? 0
                 : artefacts.conflictCount(event.entityId(), event.subjectId(), event.purposeCode());
 
+        if (event.type() == ConsentEventType.NOTICE_SERVED) {
+            // Serving a notice is evidence that the person was TOLD. It is not evidence about what
+            // they agreed to, and until Phase 18 the projection treated it as both.
+            //
+            // NOTICE_SERVED resolves to NOT_ASKED (ConsentEventType), and nothing here stopped that
+            // reaching an artefact that already held a decision: supersedes() compares time only,
+            // and isAmbiguous() is false once the skew window has passed. So a capture surface
+            // re-serving a notice for a purpose the person had already granted set the artefact to
+            // NOT_ASKED — and consent_artefact is what PolicyEngine reads, what ReceiptService
+            // renders, and what the evidence bundle reports. The grant stayed in the ledger and
+            // every hash still verified, which is exactly why nothing caught it.
+            //
+            // The damage was wider than the status. project() takes everything but grantedAt,
+            // withdrawnAt and purposeVersion off the event, and recordNoticeServed writes
+            // CaptureMethod.NOT_APPLICABLE, a null channel and a null expiresAt — so the overwrite
+            // also destroyed how the consent was captured, through which channel, and when it
+            // lapses. For a TRAI_TRANSACTIONAL_7D purpose that silently removed the seven-day
+            // expiry the whole TCCCPR module exists to enforce.
+            //
+            // So: carry the artefact forward whole and update only what a notice establishes. Where
+            // no artefact exists the behaviour is unchanged and a NOT_ASKED artefact is created —
+            // that is the DPDP s.7(i) workforce path and the reason this route exists at all.
+            //
+            // It also cannot make the artefact CONFLICTED: isAmbiguous fires when a status
+            // disagrees inside the skew window, and a notice asserts no status, so it disagrees
+            // with nothing. A stale notice is still ignored — the update sits inside supersedes(),
+            // the same ordering rule everything else here obeys.
+            if (supersedes(event, current)) {
+                artefacts.upsert(withNotice(current, event), conflicts);
+            }
+            return;
+        }
+
         if (supersedes(event, current)) {
             artefacts.upsert(project(event, current), conflicts);
             return;
@@ -190,6 +223,29 @@ public class ArtefactProjector {
                 withdrawnAt,
                 event.occurredAt(),
                 event.sequenceNumber(),
+                event.eventHash());
+    }
+
+    /**
+     * Records that a notice was served against an artefact that already exists.
+     *
+     * <p>Everything the principal decided is carried forward untouched — status, the version they
+     * agreed to, legal basis, capture method, channel, application, jurisdiction, and the three
+     * instants. What moves is what the notice actually establishes: which notice, in which version
+     * and language, and the chain position that proves when.
+     *
+     * <p>Discarding the event's notice fields instead would leave a stale notice id on somebody who
+     * has since been served a newer one — trading a false statement about consent for a false
+     * statement about notice. Recording the telling and inferring nothing about agreement is the
+     * only reading that asserts nothing untrue.
+     */
+    private static ConsentArtefact withNotice(ConsentArtefact artefact, ConsentEvent event) {
+        return new ConsentArtefact(artefact.entityId(), artefact.subjectId(), artefact.purposeCode(),
+                artefact.purposeVersion(), artefact.status(), artefact.legalBasis(),
+                event.noticeId(), event.noticeVersion(), event.languageTag(),
+                artefact.captureMethod(), artefact.channel(), artefact.applicationId(),
+                artefact.jurisdiction(), artefact.grantedAt(), artefact.expiresAt(),
+                artefact.withdrawnAt(), event.occurredAt(), event.sequenceNumber(),
                 event.eventHash());
     }
 

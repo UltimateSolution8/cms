@@ -419,6 +419,52 @@ The two are different facts and a response that treats them alike is wrong in bo
 route or a metric (`ROADMAP.md`), so today the check is a query against that event. **Confirm which
 one you have before escalating it as a breach.**
 
+#### 4.1a Verification, and what it now blocks
+
+Every rights request carries `verification_method`: `PORTAL_TOKEN` when a principal redeemed a token
+the platform minted and checked, `OPERATOR_ASSERTED` when a named person says they established
+identity, `UNVERIFIED` when nobody recorded either.
+
+**Intake is never blocked on it**, deliberately: a request parked outside the clock while somebody
+fills in a field is the outcome Rule 14(3) penalises, and GDPR Art. 12(2) forbids refusing to act on
+a request except where the principal cannot be identified.
+
+**Closure is blocked, for six of the nine types.** `FULFILLED` is refused with 409 while the row
+reads `UNVERIFIED` for `ACCESS`, `PORTABILITY`, `ERASURE`, `CORRECTION`, `COMPLETION` and
+`NOMINATION` — fulfilling those hands over the person's file, destroys it, rewrites it, or hands a
+third party the standing to do all three. `CONSENT_WITHDRAWAL`, `OPT_OUT_OF_SALE` and `GRIEVANCE`
+are **not** gated and must not be: an identity check on a withdrawal inverts DPDP s.6(4) and GDPR
+Art. 7(3), and a grievance is a complaint coming in rather than a file going out.
+
+```bash
+curl -u compliance-console:… -X POST \
+  http://localhost:8080/v1/rights/$REQUEST_ID/verification \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: r.menon@uds' \
+  -d '{"method":"OPERATOR_ASSERTED","detail":"call-back to the mobile already on file"}'
+```
+
+Three things about that call, in the order they will bite:
+
+- **`X-UDS-Actor` is required**, and it records a person beside the credential. `compliance-console`
+  is one password a team holds; "who established this identity" cannot be answered from it.
+- **It is written once.** A second call is refused 409 and the first record stands. If the first
+  entry is wrong, that is a correction to make deliberately and visibly, not by overwriting
+  evidence — there is no route for it, on purpose, and `ROADMAP.md` carries the question.
+- **Every request open today reads `UNVERIFIED`**, because until Phase 18 the field could only be
+  set at intake. That is not a backlog of people who failed to check; it is a field that was not
+  offered. Expect the first closure of each open disclosing request to need this call.
+
+⚠️ **What counts as an adequate check is not defined, and the platform cannot check the claim.**
+`detail` is free text. `REGULATORY_HANDOFF.md` §8.6 is the one-paragraph standard UDS owes the
+people who will be typing into that field — and it is now blocking in practice rather than in
+principle, because an operator refused at closure with no published standard will type whatever
+clears the gate.
+
+**Two refusals answer 409 on the same call and they mean different things.** *Identity not verified*
+is this section. *Fulfilment not evidenced* is the `fulfilment_target` register in §8.5 and lists the
+outstanding systems. Read the title before acting: an operator who configures a register when the
+problem was verification has fixed nothing.
+
 **Wire `ERROR` from `RightsSlaSweeper` to the on-call channel.** The failure mode this exists for
 is not somebody deciding to miss a deadline — it is a request sitting in a queue nobody opened for
 six weeks. That failure is silent by nature, so the countermeasure has to be noisy.
@@ -878,7 +924,7 @@ Three for propagation and the rights clock, added in Phase 17:
 |---|---|---|---|
 | `uds.consent.propagation.uncovered` | gauge | Mandatory `propagation_target` rows that no active subscription can reach | **> 0 for 30m, critical.** A system the group declared must be told about a withdrawal, that nothing can tell. Read over the *register*, so it returns to zero when the configuration is fixed — which is what makes it alertable at all |
 | `uds.consent.propagation.failed_writes` | gauge | Gap records the reconciler could not write | **> 0.** Consent changes are going out and what could not be shown to have arrived is not being recorded. The reconciler swallows these deliberately so an evidence write can never re-POST a delivered message; this is where they surface |
-| `uds.consent.rights.unverified_open` | gauge | Open rights requests whose clock started on an instant nobody verified | Threshold is **UDS's to set** (§8.6). `UNVERIFIED` refuses nothing by design; the *share* is what was undertaken to be watched. `V30` built the index for this question in Phase 16 and nothing asked it until now |
+| `uds.consent.rights.unverified_open` | gauge | Open rights requests whose clock started on an instant nobody verified | Threshold is **UDS's to set** (§8.6). Since Phase 18 the meaning of this gauge has changed: `UNVERIFIED` no longer merely labels — it refuses closure of the six disclosing or destructive types (§4.1a), so this is a count of requests that **cannot be closed**, not an informational share. `V30` built the index for this question in Phase 16 and nothing asked it until now |
 
 **Nothing alerts on `propagation_gap`.** It is append-only history and its count only grows, so a
 rule over it would fire forever and be muted within a week — which is precisely how the first design
@@ -1148,6 +1194,31 @@ publishing "the particulars of such information as may be required to identify" 
 too little and a request cannot be safely authenticated; ask too much and the identification
 requirement becomes the obstruction a regulator reads it as. `IdentifierType` is the vocabulary the
 answer goes in. See `REGULATORY_HANDOFF.md` §4.
+### 12.7 What `POST /v1/consent/notice-served` changed in Phase 18, in the capture surface's favour
+
+Tell whoever owns a capture surface, because the old behaviour was silently destructive and some of
+them will have written around it.
+
+**Before:** re-serving a notice for a purpose the person had already granted **overwrote current
+state to `NOT_ASKED`**. `NOTICE_SERVED` resolves to `NOT_ASKED`, and the projector let that through
+once the clock-skew window had passed. `consent_artefact` is what the decision engine reads, so the
+next `/v1/evaluate` denied — with the grant still in the ledger and every hash valid. The overwrite
+also took `expiresAt`, `captureMethod` and `channel` with it, which for a `TRAI_TRANSACTIONAL_7D`
+purpose removed the seven-day lapse the TCCCPR module exists to enforce.
+
+**Now:** a notice served against an existing artefact updates `noticeId`, `noticeVersion`,
+`languageTag` and the chain head, and **touches nothing about the agreement**. Serving a notice for
+a purpose with no artefact still creates `NOT_ASKED`, unchanged — that is the DPDP s.7(i) workforce
+path the route exists for.
+
+**Two consequences worth stating.** The receipt now names the notice the person was *most recently*
+shown, which is the intended reading and means `noticeId` and `purposeVersion` on a receipt are
+as-of different moments — the version is pinned to the consent, the notice is not. And the outbox
+payload for a `NOTICE_SERVED` now carries the **projected** status (`GRANTED`, where the person had
+agreed) with `restrictive: false`, not the event's own `NOT_ASKED` with `restrictive: true`. The
+shape did not change; the value did. A consumer that materialises state from the payload — DenCRM
+does — was being told to stop processing on a notice re-serve. `docs/WALKTHROUGH.md` §16.2 walks it.
+
 ### 12.4 Structured logging
 
 Activate the `json-logging` profile wherever there is an aggregator. Spring Boot emits ECS JSON

@@ -602,6 +602,42 @@
         }
       }
     },
+    "/v1/rights/{requestId}/verification" : {
+      "post" : {
+        "tags" : [ "rights-controller" ],
+        "operationId" : "recordVerification",
+        "parameters" : [ {
+          "name" : "requestId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/VerificationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/rights/{requestId}/fulfilment" : {
       "get" : {
         "tags" : [ "rights-controller" ],
@@ -4279,6 +4315,24 @@
             "type" : "string"
           }
         }
+      },
+      "VerificationRequest" : {
+        "type" : "object",
+        "properties" : {
+          "method" : {
+            "type" : "string",
+            "enum" : [ "PORTAL_TOKEN", "OPERATOR_ASSERTED", "UNVERIFIED" ]
+          },
+          "verifiedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "detail" : {
+            "type" : "string",
+            "minLength" : 1
+          }
+        },
+        "required" : [ "detail", "method" ]
       },
       "FulfilmentRequest" : {
         "type" : "object",

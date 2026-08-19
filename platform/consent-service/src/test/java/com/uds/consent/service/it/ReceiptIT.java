@@ -785,6 +785,36 @@ class ReceiptIT extends PostgresIntegrationTest {
                 .isTrue();
     }
 
+    @Test
+    @DisplayName("a re-served notice moves the receipt's notice and leaves the consent alone")
+    void aReServedNoticeUpdatesTheNoticeAndNotTheConsent() {
+        // The behaviour change Phase 18 made to the projector, asserted where a data principal
+        // would see it. Before it, serving a notice for a purpose somebody had already granted
+        // wiped the grant out of consent_artefact — which is what ReceiptService renders — so the
+        // receipt would have said NOT_ASKED for a consent still recorded in the ledger.
+        //
+        // What the receipt now says is that they agreed, and that the most recent notice they were
+        // shown is the newer one. Both are true, and the second is a change worth pinning: this is
+        // a document handed to a person, and the notice it names is the one a grievance is read
+        // against.
+        String subject = grant("MKT_OUTBOUND_CALL");
+
+        capture.recordNoticeServed(ENTITY, subject, "MKT_OUTBOUND_CALL", "NOTICE_UDS_WORKFORCE", 1,
+                "en", Jurisdiction.IN, APP, Instant.parse("2026-08-15T11:00:00Z"),
+                "rc-notice-" + subject);
+
+        ConsentReceipt receipt = receipts.issue(ENTITY, subject, Instant.now());
+
+        assertThat(receipt.entries())
+                .filteredOn(entry -> entry.purposeCode().equals("MKT_OUTBOUND_CALL"))
+                .singleElement()
+                .satisfies(entry -> {
+                    assertThat(entry.status()).isEqualTo(ConsentStatus.GRANTED);
+                    assertThat(entry.grantedAt()).isEqualTo(Instant.parse("2026-08-15T09:00:00Z"));
+                });
+        assertThat(receipt.noticeId()).isEqualTo("NOTICE_UDS_WORKFORCE");
+    }
+
     private String grant(String... purposeCodes) {
         String subject = "rc-" + UUID.randomUUID();
         List<CaptureSubmission.PurposeChoice> choices = java.util.Arrays.stream(purposeCodes)

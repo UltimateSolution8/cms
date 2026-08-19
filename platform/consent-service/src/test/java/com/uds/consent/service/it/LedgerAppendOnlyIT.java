@@ -14,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -36,6 +37,40 @@ class LedgerAppendOnlyIT extends PostgresIntegrationTest {
 
     private static final String ENTITY = "DENAVE_IN";
     private static final Instant NOW = Instant.parse("2026-08-15T09:00:00Z");
+
+    /**
+     * Every table this platform has declared append-only by revoking the application role's
+     * {@code UPDATE} and {@code DELETE}.
+     *
+     * <p>Written out by hand, and that is the point. Until Phase 18 this suite named three tables
+     * — {@code consent_event}, {@code notice_version} and {@code admin_audit_event} — while
+     * thirteen carried a revoke. So the guarantee rules 1 opens with was proven for three and
+     * taken on trust for ten, including every evidence table added since V11:
+     * {@code consent_receipt} (V11), {@code subject_age_assertion} (V18), {@code subject_alias}
+     * (V24), {@code rights_fulfilment_action} (V26), {@code webhook_delivery} (V27) and
+     * {@code propagation_gap} (V31) all arrived without anything asserting their guard held.
+     *
+     * <p>The list sits beside {@link #everyRevokedTableActuallyRefuses()}, which derives the same
+     * question from the catalogue. Two assertions of opposite shape, the arrangement
+     * {@code RowLevelSecurityIT} already uses: this one fails when a migration forgets the revoke,
+     * that one fails when a later migration hands the privilege back — which is not hypothetical,
+     * because V28 had to re-apply V8's revoke after re-creating {@code enforcement_decision} as a
+     * partitioned table, and nothing would have noticed had it not.
+     *
+     * <p>{@code rights_request_verification} (V29) is deliberately absent. Its attempt counter and
+     * consumption flag are mutable state, not evidence — the evidence is the {@code rights_request}
+     * the verification produces — and V29 says so in its own header. A reader comparing this list
+     * against the catalogue needs to find that written down rather than read it as an omission.
+     */
+    private static final List<String> APPEND_ONLY_TABLES = List.of(
+            // V2 - the V1-era tables, guarded by trigger functions as well as by the revoke.
+            "consent_event", "admin_audit_event", "notice_version", "notice_translation",
+            "purpose_version",
+            // V8, and enforcement_decision re-revoked by V28 after partitioning.
+            "enforcement_decision", "scrub_run",
+            // V11 onwards - guarded by the revoke alone, which is the sibling pattern to copy.
+            "consent_receipt", "subject_age_assertion", "subject_alias",
+            "rights_fulfilment_action", "webhook_delivery", "propagation_gap");
 
     @Autowired
     private ConsentLedger ledger;
@@ -114,6 +149,60 @@ class LedgerAppendOnlyIT extends PostgresIntegrationTest {
                 "update admin_audit_event set actor_id = 'someone-else' "
                         + "where actor_id = 'tester'"))
                 .hasStackTraceContaining("append-only");
+    }
+
+    @Test
+    @DisplayName("every table declared append-only refuses UPDATE and DELETE as the application role")
+    void everyDeclaredAppendOnlyTableRefuses() {
+        // As uds_consent_app, which is the only role whose refusal means anything: the owner can
+        // edit history by design, so a test running as the owner proves nothing about production.
+        //
+        // The statements are syntactically valid and semantically harmless - `where false` touches
+        // no row - so a table that failed to refuse reports success rather than corrupting the
+        // suite's fixtures. That is deliberate: this assertion must be able to fail without
+        // damaging the evidence plane it is asserting about.
+        JdbcTemplate application = asApplication();
+        for (String table : APPEND_ONLY_TABLES) {
+            // A column that exists on this table, read from the catalogue rather than assumed.
+            // `set c = c` is a no-op assignment, so the statement is meaningful only as a
+            // privilege question — and an assumed column name would fail on the parse instead,
+            // which passes the assertion for the wrong reason.
+            String column = jdbc.queryForObject(
+                    "select column_name from information_schema.columns "
+                            + "where table_schema = 'public' and table_name = ? "
+                            + "order by ordinal_position limit 1", String.class, table);
+
+            assertThatThrownBy(() -> application.update(
+                    "update " + table + " set " + column + " = " + column + " where false"))
+                    .describedAs("UPDATE on %s must be refused for uds_consent_app", table)
+                    .hasStackTraceContaining("permission denied");
+            assertThatThrownBy(() -> application.update("delete from " + table + " where false"))
+                    .describedAs("DELETE on %s must be refused for uds_consent_app", table)
+                    .hasStackTraceContaining("permission denied");
+        }
+    }
+
+    @Test
+    @DisplayName("nothing has quietly handed the privilege back to the application role")
+    void everyRevokedTableActuallyRefuses() {
+        // The other half, derived rather than remembered. The list above catches a migration that
+        // forgets to revoke; this catches one that re-grants. V28 re-created enforcement_decision
+        // as a partitioned table and had to re-apply V8's revoke - had it not, the hand-written
+        // list would still have named the table and nothing would have failed.
+        //
+        // The isNotEmpty guard is in front of it because a query returning nothing would pass
+        // vacuously, which is the failure this assertion shape is otherwise prone to.
+        List<String> revoked = jdbc.queryForList(
+                "select c.relname from pg_class c "
+                        + "join pg_namespace n on n.oid = c.relnamespace "
+                        + "where n.nspname = 'public' and c.relkind in ('r', 'p') "
+                        + "and not has_table_privilege('uds_consent_app', c.oid, 'UPDATE')",
+                String.class);
+
+        assertThat(revoked)
+                .describedAs("the catalogue must report revoked tables, or this passes vacuously")
+                .isNotEmpty()
+                .containsAll(APPEND_ONLY_TABLES);
     }
 
     // -------------------------------------------------------------------------------------------
@@ -265,6 +354,27 @@ class LedgerAppendOnlyIT extends PostgresIntegrationTest {
     }
 
     // -------------------------------------------------------------------------------------------
+
+    /**
+     * A {@code JdbcTemplate} connected as {@code uds_consent_app}, the role that serves production
+     * traffic.
+     *
+     * <p>This distinction is the whole of what the append-only privilege assertion is worth.
+     * Migrations and the suite's own fixtures run as {@code uds_consent_owner}, which can edit
+     * history by design — so a revoke test running on the default template would be stopped by the
+     * V2 triggers on five tables and by nothing at all on the other eight, and would report
+     * success for both reasons. Connecting as the application role is what makes "the privilege was
+     * removed" a fact rather than an assumption.
+     *
+     * <p>{@code SingleConnectionDataSource} for the same reason {@code RowLevelSecurityIT} uses
+     * one: a pooled connection would carry whatever session state ran before it.
+     */
+    private JdbcTemplate asApplication() {
+        SingleConnectionDataSource dataSource = new SingleConnectionDataSource(
+                POSTGRES.getJdbcUrl(), "uds_consent_app", "uds_consent_app", true);
+        dataSource.setDriverClassName(org.postgresql.Driver.class.getName());
+        return new JdbcTemplate(dataSource);
+    }
 
     /**
      * Runs a statement the triggers would otherwise reject, standing in for an attacker or a

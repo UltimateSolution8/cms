@@ -7,6 +7,8 @@ import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.SuppressionScope;
 import com.uds.consent.core.model.SuppressionSource;
 import com.uds.consent.ledger.store.AdminAuditStore;
+import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
 import com.uds.consent.core.model.IdentifierType;
 import com.uds.consent.ledger.store.SubjectStore;
@@ -51,6 +53,7 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
     private static final String APP = "DENAVE_WEB";
     private static final String NOTICE = "NOTICE_DENAVE_B2B";
     private static final String PURPOSE = "MKT_OUTBOUND_CALL";
+    private static final String TOPIC = "uds.consent.events";
 
     @Autowired
     private EvidenceBundleService bundles;
@@ -78,6 +81,12 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
 
     @Autowired
     private TestRestTemplate rest;
+
+    @Autowired
+    private PropagationTargetStore propagationTargets;
+
+    @Autowired
+    private WebhookStore webhooks;
 
     @Test
     @DisplayName("the bundle carries the events, their hashes and the chain verification")
@@ -433,6 +442,95 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
                         explains. Either add it to Bundle, or add it to accountedFor with the \
                         reason it is left out. Found: %s""", subjectScoped)
                 .allSatisfy(table -> assertThat(accountedFor).containsKey(table));
+    }
+
+    @Test
+    @DisplayName("the propagation section names who was told and who could not be")
+    void thePropagationSectionSaysWhoWasTold() {
+        // The section a data principal is actually handed under GDPR Art. 19 limb 2, and until now
+        // nothing asserted a single field of it. The stores were covered; what the document says
+        // was not — which is the same gap the receipt had before Phase 15.
+        String subject = grant();
+        String reached = uniqueSystem();
+        String unreachable = uniqueSystem();
+        // The subscription id IS the system code: WebhookStore.upsert derives system_code from
+        // upper(subscriptionId), which is how the register joins. A different id here reads as an
+        // unreachable target — the exact false gap a system_code mismatch produces in production.
+        String subscription = reached;
+
+        try {
+            // Reached: a registered target with an active subscription, and a delivery row carrying
+            // this subject. Mandatory is false on both deliberately — a mandatory target with no
+            // subscription is exactly what uds_consent_propagation_uncovered counts, and leaving
+            // one behind would make this suite decide another suite's gauge.
+            propagationTargets.upsert(ENTITY, TOPIC, reached, false, true, "bundle fixture");
+            // A URL unique to this test. webhook_subscription is unique on (entity_id, topic,
+            // url) and the constraint does not exclude inactive rows, so a shared endpoint left
+            // behind here is a duplicate-key failure inside whichever suite registers next — which
+            // presents there as a fault in that suite and is completely opaque from inside it.
+            webhooks.upsert(subscription, ENTITY, TOPIC, "http://127.0.0.1:1/" + subscription,
+                    "eb-secret", true, "bundle fixture");
+            webhooks.recordDelivery(subscription, ENTITY, subject, 1L, 1, "DELIVERED", 200, null,
+                    Instant.now().truncatedTo(ChronoUnit.SECONDS));
+
+            propagationTargets.upsert(ENTITY, TOPIC, unreachable, false, true, "bundle fixture");
+
+            List<EvidenceBundleService.PropagationRecord> propagation =
+                    bundles.assemble(ENTITY, subject, Instant.now()).propagation();
+
+            assertThat(propagation)
+                    .withFailMessage("a populated register produced no propagation section")
+                    .isNotEmpty();
+
+            assertThat(propagation).anySatisfy(record -> {
+                assertThat(record.systemCode()).isEqualTo(reached);
+                assertThat(record.reachable()).isTrue();
+                assertThat(record.delivered()).isEqualTo(1L);
+                assertThat(record.failed()).isZero();
+                assertThat(record.firstDeliveredAt()).isNotNull();
+                assertThat(record.lastDeliveredAt()).isNotNull();
+                // The distinction the closure added: this principal's delivery is attributed, so
+                // a zero elsewhere means "not told" rather than "told before V31 recorded who".
+                assertThat(record.deliveryAttributed()).isTrue();
+            });
+
+            assertThat(propagation).anySatisfy(record -> {
+                assertThat(record.systemCode()).isEqualTo(unreachable);
+                // The finding: the group declared this system must hear, and nothing can tell it.
+                assertThat(record.reachable()).isFalse();
+                assertThat(record.delivered()).isZero();
+                // False beside zero delivered is "we cannot say", not "nobody was told" — the
+                // record's javadoc turns on this and nothing asserted it until now.
+                assertThat(record.deliveryAttributed()).isFalse();
+            });
+        } finally {
+            // propagation_target is configuration, not evidence, so it is removed rather than
+            // deactivated: coverage() reports inactive targets too, and a residue here would show
+            // up inside every other suite's bundle for this entity.
+            jdbc.update("delete from propagation_target where entity_id = ? and system_code in (?, ?)",
+                    ENTITY, reached, unreachable);
+            // Deactivated rather than deleted, and the reason is a real constraint rather than a
+            // preference: webhook_delivery references the subscription and is append-only, so the
+            // row cannot be removed once an attempt has been recorded against it — which is the
+            // evidence plane working. The endpoint is unique to this test, so an inactive row left
+            // behind collides with nothing.
+            jdbc.update("update webhook_subscription set active = false where subscription_id = ?",
+                    subscription);
+        }
+    }
+
+    @Test
+    @DisplayName("an empty register produces no propagation section rather than an empty claim")
+    void anEmptyRegisterMakesNoPropagationClaim() {
+        // No register, no claim: the platform will not imply an obligation UDS has not declared.
+        // Asserted because the alternative — inventing a row per known subscription — would tell a
+        // principal that a system was obliged to hear about them when nobody said so.
+        assertThat(bundles.assemble(ENTITY, grant(), Instant.now()).propagation()).isEmpty();
+    }
+
+    /** A system code no other suite will register, so one test's register cannot decide another's. */
+    private static String uniqueSystem() {
+        return "EBIT_" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 
     private String grant() {

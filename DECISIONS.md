@@ -173,6 +173,42 @@ for every phase. Read it for the argument; read this to find out which argument 
 - **k6 is not in CI** because a fifteen-minute ramp against a million-subject database is a scheduled
   exercise, not a pull-request gate. That is a different sentence from "k6 is not installed", and only
   one of them was ever true. *`.github/workflows/build.yml`.*
+- **The verification gate is on the *claim*, not the act, and never at intake.** `FULFILLED` is refused
+  409 on a disclosing or destructive right while `verification_method` reads `UNVERIFIED`. It does not
+  refuse intake — GDPR Art. 12(2) forbids refusing to act on a request — and it does not gate disclosure
+  itself, because `GET /v1/admin/evidence/subject/**` is unlinked from any `rights_request`. What it buys
+  is that the moment somebody wants a request marked answered, which is the cheapest moment there is,
+  they must first say who they checked. *PLAN Phase 18, Q2; `ROADMAP.md` for the unlinked route.*
+- **Six types are gated and three deliberately are not.** `ACCESS`, `PORTABILITY`, `ERASURE`,
+  `CORRECTION`, `COMPLETION`, `NOMINATION` disclose or irreversibly change a person's data.
+  `CONSENT_WITHDRAWAL` and `OPT_OUT_OF_SALE` are never gated — DPDP s.6(4) and GDPR Art. 7(3) require
+  withdrawing to be as easy as consenting was, and consent is a checkbox with no identity check at all.
+  `GRIEVANCE` is ungated on a **risk argument rather than a clause**: it is a complaint coming in, not a
+  file going out. *PLAN Phase 18, Q2.*
+- **DPDP does not require identity verification before answering a rights request, and no document here
+  may say it does.** Checked against ss.11, 13, 15 and Rules 13, 14: Rule 14(1)(b) is a
+  publish-your-own-requirements duty and s.15 places the duty on the *principal* not to impersonate. The
+  support is GDPR Art. 12(6) ("may request", on reasonable doubt) and Recital 64 ("should", access only).
+  Same posture as Art. 19 — the platform exceeds DPDP, which is a position to state rather than a gap
+  being filled. *PLAN Phase 18, clause table; `docs/TRACEABILITY.md` §1.*
+- **Verification is written once.** The `where` clause requires the row still to be `UNVERIFIED`, so two
+  operators cannot race into a silent overwrite. It is evidence about what a named person did; if it is
+  wrong, that is a correction to make deliberately, and the superseding-record shape is a design question
+  on `ROADMAP.md` rather than an edit path shipped by default. *PLAN Phase 18, Q1.*
+- **`PORTAL_TOKEN` cannot be asserted by an operator.** It is the platform's own label for a principal
+  who redeemed a token it minted and checked; letting a human type it would put the strongest claim the
+  platform makes behind a say-so. `PrincipalPortalService` stays its only writer. *PLAN Phase 18, Q1.*
+- **A notice served never asserts a consent status — in the projection *and* on the wire.** `NOTICE_SERVED` resolving to `NOT_ASKED` was
+  allowed to overwrite a live grant in `consent_artefact` — which is what the decision engine reads —
+  destroying the status, the expiry, the capture method and the channel, with the grant still in the
+  ledger and every hash valid. The projection now carries the artefact forward and updates the notice
+  fields alone. Where no artefact exists it still creates `NOT_ASKED`, which is the s.7(i) workforce path.
+  **The fan-out was fixed in the same phase, after `qa-verifier` found it:** `ConsentLedger` published
+  the event's own `resultingStatus`, so downstream systems were told `NOT_ASKED` with `restrictive: true`
+  while the projection said `GRANTED`. The payload now carries the **projected** status — the state
+  after the event, which is the projector's answer — and `NOTICE_SERVED` is not flagged restrictive.
+  A projection and a wire that disagree is worse than the original defect, because neither looks wrong
+  alone. *PLAN Phase 18, Q3.*
 - **There is no git remote, deliberately** — the schema and its seed data are regulated personal data by
   design intent, so a push destination is a decision for UDS. Nothing is committed without an explicit
   instruction. *`CLAUDE.md`.*

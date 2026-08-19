@@ -231,6 +231,7 @@ public class RightsService {
                             + "done and, where it was refused, on what ground");
         }
         if (status == RightsRequestStatus.FULFILLED) {
+            requireVerifiedIdentity(before);
             requireFulfilmentEvidence(before);
         }
 
@@ -251,6 +252,196 @@ public class RightsService {
         }
 
         return find(requestId);
+    }
+
+    /**
+     * Request types whose fulfilment discloses personal data or acts irreversibly on it.
+     *
+     * <p>These are the ones {@link #requireVerifiedIdentity} gates, and the split is the design.
+     * Fulfilling an {@code ACCESS} or {@code PORTABILITY} request hands over the person's file;
+     * fulfilling an {@code ERASURE}, {@code CORRECTION} or {@code COMPLETION} destroys or rewrites
+     * it; fulfilling a {@code NOMINATION} hands a third party the standing to do all of the above.
+     * Recording any of them as discharged, with nothing on the row about who was asking, is the
+     * platform asserting compliance on an identity nobody established.
+     *
+     * <p><strong>What is deliberately absent matters more than what is here.</strong>
+     * {@code CONSENT_WITHDRAWAL} and {@code OPT_OUT_OF_SALE} are never gated: a withdrawal by an
+     * impostor <em>stops</em> processing, and DPDP s.6(4) requires withdrawal to be as easy as
+     * giving was — consent is given by a checkbox with no identity check at all, so demanding one
+     * to withdraw fails "comparable ease" on its face. GDPR Art. 7(3) says the same for the EU
+     * entities. {@code GRIEVANCE} is ungated on a risk argument rather than a clause: it is the
+     * intake of a complaint, not the disclosure of the complainant's file back to them, so the
+     * misdirected-disclosure risk that motivates gating {@code ACCESS} does not arise — and gating
+     * s.13's escalation path would turn a control into a reason not to answer.
+     */
+    private static final java.util.Set<RightsRequestType> VERIFICATION_GATED = java.util.EnumSet.of(
+            RightsRequestType.ACCESS, RightsRequestType.PORTABILITY, RightsRequestType.ERASURE,
+            RightsRequestType.CORRECTION, RightsRequestType.COMPLETION,
+            RightsRequestType.NOMINATION);
+
+    /**
+     * Refuses {@code FULFILLED} on a disclosing right when nobody recorded who was asking.
+     *
+     * <p>Before this, an {@code ACCESS} request filed by telephone — which defaults to
+     * {@code UNVERIFIED}, correctly — could be closed as fulfilled, and the evidence plane would
+     * record a person's whole file as having been handed over in discharge of a statutory right
+     * with not one fact about the identity of the recipient.
+     *
+     * <p><strong>DPDP does not require this, and the platform must not imply that it does.</strong>
+     * No provision of the Act or the Rules obliges a fiduciary to verify identity before answering:
+     * s.15 places the duty on the <em>principal</em> not to impersonate, and Rule 14(1)(b) is a
+     * publish-your-own-requirements duty rather than a floor. What supports the gate is GDPR
+     * Art. 12(6) — <em>"where the controller has reasonable doubts concerning the identity of the
+     * natural person making the request… the controller may request the provision of additional
+     * information"</em> — read with Recital 64, which is specific to access and is a recital rather
+     * than an operative duty. The platform is doing more than DPDP asks, which is a position, not a
+     * requirement being met.
+     *
+     * <p><strong>It gates the claim, not the act, and not intake.</strong> GDPR Art. 12(2) forbids
+     * refusing to act on a request, so a gate at intake would be the very refusal the clause
+     * prohibits — and rules 6's posture that {@code UNVERIFIED} refuses nothing remains true of
+     * intake for exactly that reason. What changes is what may be <em>asserted</em> at closure. Nor
+     * does it gate disclosure itself: the evidence bundle is an ADMIN route unlinked from any
+     * rights request, so an operator can still disclose a file and never open one. What the gate
+     * buys is that the moment somebody wants the request marked answered — the cheapest moment
+     * there is — they must first say who they checked.
+     */
+    private void requireVerifiedIdentity(RightsRequestStore.Request request) {
+        if (!VERIFICATION_GATED.contains(request.type())) {
+            return;
+        }
+        if (request.verification() != RightsVerificationMethod.UNVERIFIED) {
+            return;
+        }
+        throw new VerificationMissingException(request.requestId(), request.type());
+    }
+
+    /**
+     * Records that somebody established who the requester was, after intake.
+     *
+     * <p>The half of this control that makes the other half possible. Every request open today
+     * reads {@code UNVERIFIED}, because until now the field could only be set at intake — so a gate
+     * without this route would leave the existing backlog permanently unclosable rather than merely
+     * requiring one honest sentence per request.
+     *
+     * <p>{@code PORTAL_TOKEN} is refused here. It is the one method the platform establishes for
+     * itself, and letting an operator assert it would put the platform's strongest label on a
+     * human's say-so. {@code PrincipalPortalService} stays its only writer.
+     *
+     * <p>The instant is bounded on both sides, and the same {@link ClockTolerance#SKEW} window
+     * applies to each. Beyond it into the future the value is a claim about the future rather than
+     * a record; earlier than {@code receivedAt} minus the window it asserts the platform verified
+     * the identity behind a request it had not yet received. <b>The grace on the lower bound is
+     * deliberate and wider than the plan specified:</b> the common case is an operator who checks
+     * identity on the same call that raises the request, and a console sending a second-truncated
+     * instant lands fractionally before {@code receivedAt} through no fault of anyone's. Both
+     * refusals are {@link IllegalArgumentException}, which lands on the existing 400 handler.
+     *
+     * @param actorId the human, resolved through {@code Actor.required} by the caller — rules 5:
+     *                this route records that <em>a person checked</em>, so a shared credential
+     *                alone cannot answer the question it exists to answer
+     */
+    @Transactional
+    public RightsRequestStore.Request recordVerification(String requestId,
+                                                         RightsVerificationMethod method,
+                                                         Instant verifiedAt, String detail,
+                                                         String actorId) {
+        RightsRequestStore.Request before = store.find(requestId)
+                .orElseThrow(() -> new IllegalArgumentException("unknown rights request: "
+                        + requestId));
+
+        if (method == null || method == RightsVerificationMethod.UNVERIFIED) {
+            throw new IllegalArgumentException(
+                    "recording a verification needs a method that says what was established; "
+                            + "UNVERIFIED is the absence of one and is already the row's state");
+        }
+        if (method == RightsVerificationMethod.PORTAL_TOKEN) {
+            throw new IllegalArgumentException(
+                    "PORTAL_TOKEN is established by the platform when a principal redeems a "
+                            + "verification token on /v1/portal/**, and cannot be asserted by an "
+                            + "operator. Use OPERATOR_ASSERTED and say what was checked.");
+        }
+        if (detail == null || detail.isBlank()) {
+            throw new IllegalArgumentException(
+                    "recording a verification needs a description of what was checked — a "
+                            + "call-back to a number already on file, an employee id checked at a "
+                            + "desk, a document reference. The claim is the value here; a label "
+                            + "with nothing behind it is what UNVERIFIED already says.");
+        }
+
+        Instant now = Instant.now();
+        Instant at = verifiedAt == null ? now : verifiedAt;
+        if (at.isAfter(now.plus(ClockTolerance.SKEW))) {
+            throw new IllegalArgumentException("verifiedAt " + at + " is in the future; clocks may "
+                    + "differ by up to " + ClockTolerance.SKEW + ", beyond that it is a claim "
+                    + "about the future rather than a record of a check that happened");
+        }
+        // The same skew window, applied to the lower bound as well. Without it a check recorded in
+        // the same second as intake is refused on a sub-second difference between the two clocks —
+        // which is the common case, not an edge one: an operator who verifies on the call that
+        // raised the request is exactly who this route is for.
+        if (at.isBefore(before.receivedAt().minus(ClockTolerance.SKEW))) {
+            throw new IllegalArgumentException("verifiedAt " + at + " is before the request was "
+                    + "received at " + before.receivedAt() + "; the platform cannot have verified "
+                    + "the identity behind a request it had not yet received. Clocks may differ by "
+                    + "up to " + ClockTolerance.SKEW + ", and this is beyond that.");
+        }
+
+        if (!store.recordVerification(requestId, method, at, detail)) {
+            throw new VerificationAlreadyRecordedException(requestId, before.verification());
+        }
+
+        audit.record(actorId, "RIGHTS_REQUEST_VERIFIED", before.entityId(), "rights_request",
+                requestId, Map.of("method", method.name(), "verifiedAt", at.toString(),
+                        "from", before.verification().name()));
+
+        return find(requestId);
+    }
+
+    /**
+     * A disclosing right cannot be recorded as fulfilled because nobody recorded who was asking.
+     *
+     * <p>409 rather than 400, for the same reason {@link FulfilmentIncompleteException} is: nothing
+     * about the request is malformed and the caller is not wrong to be trying. The state of the
+     * world is not yet what the closure would assert. Both refusals are 409 and an operator told
+     * the wrong one fixes the wrong thing, so the message names verification explicitly and points
+     * at the route that clears it.
+     */
+    public static class VerificationMissingException extends RuntimeException {
+
+        private final transient RightsRequestType type;
+
+        VerificationMissingException(String requestId, RightsRequestType type) {
+            super("rights request " + requestId + " is a " + type + " request and cannot be closed "
+                    + "as FULFILLED while its verification_method is UNVERIFIED: fulfilling it "
+                    + "discloses or irreversibly changes this person's data, and nothing on the "
+                    + "record says who was established to be asking. Record what was checked at "
+                    + "POST /v1/rights/" + requestId + "/verification, then close it. Withdrawals, "
+                    + "opt-outs and grievances are deliberately not gated this way.");
+            this.type = type;
+        }
+
+        public RightsRequestType type() {
+            return type;
+        }
+    }
+
+    /**
+     * Verification has already been recorded, and this platform does not overwrite it.
+     *
+     * <p>409, and the reason is the evidence plane rather than tidiness: the row says a named
+     * person established an identity in these words, and replacing it would erase that without
+     * trace. A correction path — a superseding record rather than an edit, the shape
+     * {@code subject_alias} uses — is a design question and is on {@code ROADMAP.md}.
+     */
+    public static class VerificationAlreadyRecordedException extends RuntimeException {
+
+        VerificationAlreadyRecordedException(String requestId, RightsVerificationMethod existing) {
+            super("rights request " + requestId + " already records a verification of "
+                    + existing + ", and verification is written once. It is evidence about what a "
+                    + "person did, so it is not overwritten; if it is wrong, that is a correction "
+                    + "to make deliberately and visibly rather than by replacing the record.");
+        }
     }
 
     /**

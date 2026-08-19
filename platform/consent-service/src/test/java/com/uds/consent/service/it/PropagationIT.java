@@ -138,18 +138,43 @@ class PropagationIT extends PostgresIntegrationTest {
     }
 
     @Test
-    @DisplayName("an empty register records nothing at all")
+    @DisplayName("the register decides what is recorded, not the traffic")
     void anEmptyRegisterIsANoOp() {
         // The same deliberate no-op as an unconfigured fulfilment_target register, and it is the
         // state every entity is in until UDS populates it. A platform that invented targets would
         // be asserting an obligation nobody declared.
-        String system = uniqueSystem();
-        long before = gapsFor(system).size();
+        //
+        // This test used to look up a system that had never been registered and assert its gap
+        // count had not changed — a count that was zero by construction, so the assertion held
+        // under a reconciler that did nothing at all. What makes it a no-OP rather than a no-op is
+        // the control: the same message, in the same relay pass, must produce a gap for a system
+        // that IS registered. Three systems, one message, three different outcomes decided by the
+        // register alone.
+        String registered = uniqueSystem();
+        String neverRegistered = uniqueSystem();
+        String deactivated = uniqueSystem();
+
+        targets.upsert(ENTITY, TOPIC, registered, true, true, "the control");
+        targets.upsert(ENTITY, TOPIC, deactivated, true, false, "registered, then switched off");
 
         subscribe();
         drain(enqueue(ENTITY, withdrawal()));
 
-        assertThat(gapsFor(system)).hasSize((int) before);
+        // The control. Without it every assertion below passes against a reconciler that never ran.
+        assertThat(awaitGapsFor(registered))
+                .withFailMessage("the message produced no gap for a mandatory registered system, "
+                        + "so the two absences below prove nothing")
+                .isNotEmpty();
+
+        assertThat(gapsFor(neverRegistered))
+                .withFailMessage("a system nobody registered was recorded as untold, which asserts "
+                        + "an obligation UDS never declared")
+                .isEmpty();
+
+        assertThat(gapsFor(deactivated))
+                .withFailMessage("an inactive target was recorded, so the register's active flag "
+                        + "is not being read")
+                .isEmpty();
     }
 
     @Test

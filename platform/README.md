@@ -98,7 +98,7 @@ mvn verify
 `test` runs the unit suites — **151 cases** (33 in `consent-core`, 113 in `consent-policy`, 5 in
 `consent-service`), no Docker, about two seconds. `verify` adds the integration suites, which need
 Docker for a real PostgreSQL because the properties they check are database properties: 38 in
-`consent-ledger` and 339 in `consent-service`. **528 tests in total.**
+`consent-ledger` and 366 in `consent-service`. **555 tests in total.**
 
 Those are the figures the build prints, not an estimate. The README claimed 188 for several months
 after it stopped being true, and then 414 for one release after it stopped being true, which is a

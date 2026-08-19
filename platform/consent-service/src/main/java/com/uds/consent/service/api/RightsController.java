@@ -184,6 +184,33 @@ public class RightsController {
                 "outstanding", rights.outstandingFulfilment(requestId));
     }
 
+    /**
+     * Records that somebody established who the requester was, after intake.
+     *
+     * <p>The route that makes the closure gate honest rather than obstructive. Verification could
+     * previously only be set on the intake call, so a request filed over the telephone was labelled
+     * {@code UNVERIFIED} for life — including after an operator had called the principal back on a
+     * number already on file and satisfied themselves. Every request open today reads
+     * {@code UNVERIFIED} for that reason, and this is how each one gets its sentence.
+     *
+     * <p>{@code X-UDS-Actor} is required, through {@code Actor.required} rather than the intake
+     * route's fallback: this records that <em>a person checked</em>, and a shared credential cannot
+     * answer that. Under a bearer token the subject claim supplies it and the header is ignored,
+     * unchanged from every other administrative write.
+     *
+     * <p>Write-once. A second call is refused 409 rather than overwriting, because the row is
+     * evidence about what a named person did.
+     */
+    @PostMapping("/{requestId}/verification")
+    @PreAuthorize("hasRole('ADMIN')")
+    public RightsRequestStore.Request recordVerification(
+            @PathVariable String requestId,
+            @Valid @RequestBody VerificationRequest request,
+            Authentication authentication) {
+        return rights.recordVerification(requestId, request.method(), request.verifiedAt(),
+                request.detail(), administratorOf(authentication));
+    }
+
     /** What each system did, and which mandatory ones still have not. */
     @GetMapping("/{requestId}/fulfilment")
     @PreAuthorize("hasRole('ADMIN')")
@@ -262,6 +289,27 @@ public class RightsController {
             Instant receivedAt,
             String details,
             String verifiedAs) {
+    }
+
+    /**
+     * @param method     what was established. {@code OPERATOR_ASSERTED} is the only value an
+     *                   operator may send — {@code PORTAL_TOKEN} is the platform's own label for a
+     *                   principal who redeemed a token, and {@code UNVERIFIED} is the absence of a
+     *                   check rather than a kind of one
+     * @param verifiedAt when the check happened, if that differs from now. Bounded by the shared
+     *                   clock-skew window in **both** directions: not that far into the future, and
+     *                   not more than that far before {@code receivedAt} — the platform cannot have
+     *                   verified a request it did not have, but an operator checking identity on
+     *                   the call that raised it is the common case and must not be refused
+     * @param detail     what was actually done, in the operator's words: a call-back to a number
+     *                   already on file, an employee id checked at a desk, a document reference.
+     *                   Required, because the claim is the whole value of the record. What counts
+     *                   as an adequate check is UDS's to publish — {@code REGULATORY_HANDOFF.md}
+     *                   section 8.6 — and the platform cannot check the claim
+     */
+    public record VerificationRequest(@NotNull RightsVerificationMethod method,
+                                      Instant verifiedAt,
+                                      @NotBlank String detail) {
     }
 
     public record TransitionRequest(

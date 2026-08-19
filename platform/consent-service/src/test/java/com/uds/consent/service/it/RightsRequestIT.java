@@ -17,6 +17,8 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -218,6 +220,7 @@ class RightsRequestIT extends PostgresIntegrationTest {
     void closedRequestsAreNotEdited() {
         RightsRequestStore.Request request =
                 file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+        verify(request);
         rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
                 "Summary of processing sent to the principal", "compliance-console");
 
@@ -250,6 +253,7 @@ class RightsRequestIT extends PostgresIntegrationTest {
         RightsRequestStore.Request request = file(RightsRequestType.ACCESS, Jurisdiction.KR,
                 Instant.now().minus(30, ChronoUnit.DAYS));
 
+        verify(request);
         RightsRequestStore.Request closed = rights.transition(request.requestId(),
                 RightsRequestStatus.FULFILLED, "priya", "Answered, twenty days late",
                 "compliance-console");
@@ -471,6 +475,7 @@ class RightsRequestIT extends PostgresIntegrationTest {
         RightsRequestStore.Request request =
                 file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
 
+        verify(request);
         assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
                 "Read out on the call; nothing further held", "compliance-console").status())
                 .isEqualTo(RightsRequestStatus.FULFILLED);
@@ -520,6 +525,294 @@ class RightsRequestIT extends PostgresIntegrationTest {
         assertThat(unexplained.getBody()).contains("resolution");
     }
 
+    @Test
+    @DisplayName("a disclosing right cannot be closed as fulfilled on an identity nobody recorded")
+    void anUnverifiedAccessRequestCannotBeFulfilled() {
+        // The hole this closes: an ACCESS request filed by telephone defaults to UNVERIFIED —
+        // correctly, because parking it outside the clock until a field is filled is what Rule
+        // 14(3) penalises — and could then be closed as FULFILLED. The evidence plane would record
+        // a person's whole file as handed over in discharge of a statutory right, holding not one
+        // fact about who received it.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+        assertThat(request.verification()).isEqualTo(RightsVerificationMethod.UNVERIFIED);
+
+        assertThatThrownBy(() -> rights.transition(request.requestId(),
+                RightsRequestStatus.FULFILLED, "priya", "Summary sent", "compliance-console"))
+                .isInstanceOf(RightsService.VerificationMissingException.class);
+
+        // Then the operator does the thing the gate exists to make them do, and it closes.
+        verify(request);
+        assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
+                "Summary sent", "compliance-console").status())
+                .isEqualTo(RightsRequestStatus.FULFILLED);
+    }
+
+    @Test
+    @DisplayName("a withdrawal is never gated on verification, however it was filed")
+    void anUnverifiedWithdrawalStillCloses() {
+        // The assertion that fails the day somebody applies the gate uniformly, which is the
+        // likeliest wrong turn here. A withdrawal by an impostor STOPS processing, and DPDP s.6(4)
+        // requires withdrawing to be as easy as consenting was — consent is given by a checkbox
+        // with no identity check at all. GDPR Art. 7(3) says the same. Making an identity check a
+        // toll gate on the one right the group most wants exercised freely inverts both.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.CONSENT_WITHDRAWAL, Jurisdiction.IN, Instant.now());
+        assertThat(request.verification()).isEqualTo(RightsVerificationMethod.UNVERIFIED);
+
+        assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
+                "Withdrawal recorded in the ledger", "compliance-console").status())
+                .isEqualTo(RightsRequestStatus.FULFILLED);
+    }
+
+    @Test
+    @DisplayName("every request type is on a named side of the gate, so a tenth cannot default in")
+    void everyTypeIsDeliberatelyGatedOrNot() {
+        // The gated set is an EnumSet, so a tenth RightsRequestType would default to *ungated* —
+        // the permissive direction — with nothing failing. The plan's stated purpose was that a
+        // new type be "a decision somebody has to make rather than a default", and a constant
+        // alone cannot force that. This does: the map must cover values() exactly, and each side
+        // is then exercised rather than asserted.
+        Map<RightsRequestType, Boolean> gated = Map.ofEntries(
+                Map.entry(RightsRequestType.ACCESS, true),
+                Map.entry(RightsRequestType.PORTABILITY, true),
+                Map.entry(RightsRequestType.ERASURE, true),
+                Map.entry(RightsRequestType.CORRECTION, true),
+                Map.entry(RightsRequestType.COMPLETION, true),
+                Map.entry(RightsRequestType.NOMINATION, true),
+                Map.entry(RightsRequestType.CONSENT_WITHDRAWAL, false),
+                Map.entry(RightsRequestType.OPT_OUT_OF_SALE, false),
+                Map.entry(RightsRequestType.GRIEVANCE, false));
+
+        assertThat(gated.keySet())
+                .as("a new request type must be added here deliberately, on one side or the other")
+                .containsExactlyInAnyOrder(RightsRequestType.values());
+
+        gated.forEach((type, isGated) -> {
+            RightsRequestStore.Request request =
+                    file(type, Jurisdiction.IN, Instant.now());
+            if (isGated) {
+                assertThatThrownBy(() -> rights.transition(request.requestId(),
+                        RightsRequestStatus.FULFILLED, "priya", "closed", "compliance-console"))
+                        .as("%s discloses or irreversibly changes the file and must be gated", type)
+                        .hasMessageContaining("UNVERIFIED");
+            } else {
+                assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED,
+                        "priya", "closed", "compliance-console").status())
+                        .as("%s must never be gated on identity", type)
+                        .isEqualTo(RightsRequestStatus.FULFILLED);
+            }
+        });
+    }
+
+    @Test
+    @DisplayName("a grievance is not gated either, and that is a risk judgement rather than a clause")
+    void anUnverifiedGrievanceStillCloses() {
+        // No text forbids gating a grievance and none supports leaving it open. What decides it is
+        // that a grievance is the intake of a complaint, not the disclosure of the complainant's
+        // file back to them — so the misdirected-disclosure risk that motivates gating ACCESS does
+        // not arise, and gating s.13's escalation path would turn a control into a reason not to
+        // answer the thing a principal escalates to the Board.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.GRIEVANCE, Jurisdiction.IN, Instant.now());
+
+        assertThat(rights.transition(request.requestId(), RightsRequestStatus.FULFILLED, "priya",
+                "Grievance answered in writing", "compliance-console").status())
+                .isEqualTo(RightsRequestStatus.FULFILLED);
+    }
+
+    @Test
+    @DisplayName("the two 409s are told apart, so an operator does not fix the wrong thing")
+    void theVerificationRefusalNamesVerification() {
+        // Both gates answer 409 on the same call. A test asserting only the status would pass with
+        // the two swapped, and an operator told "fulfilment is outstanding" when the real problem
+        // is verification goes and configures a register that was never the issue.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        ResponseEntity<String> refused = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange("/v1/rights/" + request.requestId(), HttpMethod.PATCH,
+                        new HttpEntity<>(Map.of("status", "FULFILLED",
+                                "resolution", "summary sent to the principal")), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody())
+                .contains("Identity not verified")
+                .contains("UNVERIFIED")
+                .contains("/verification");
+    }
+
+    @Test
+    @DisplayName("a recorded verification says what was checked, by whom, and when")
+    void aVerificationIsRecordedWithItsActor() {
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+        int before = audit.recent(ENTITY, 200).size();
+        // Truncated to seconds, which is what a console sends. It lands fractionally before the
+        // request's own receivedAt, and that must not be refused — the operator verifying on the
+        // call that raised the request is the case this route exists for.
+        Instant checkedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+
+        // Over HTTP with the header, not through the service with the name already resolved.
+        // The property is that the human in X-UDS-Actor reaches the append-only row beside the
+        // credential; calling recordVerification directly asserts only that a store persists a
+        // string it was handed, which is the mechanism. Found by qa-verifier.
+        org.springframework.http.HttpHeaders headers =
+                new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        headers.set("X-UDS-Actor", "arjun@uds.example");
+
+        ResponseEntity<Map> recorded = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange("/v1/rights/" + request.requestId() + "/verification", HttpMethod.POST,
+                        new HttpEntity<>(Map.of("method", "OPERATOR_ASSERTED",
+                                "verifiedAt", checkedAt.toString(),
+                                "detail", "call-back to the mobile already on file"), headers),
+                        Map.class);
+
+        assertThat(recorded.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        RightsRequestStore.Request verified = store.find(request.requestId()).orElseThrow();
+        assertThat(verified.verification())
+                .isEqualTo(RightsVerificationMethod.OPERATOR_ASSERTED);
+        assertThat(verified.verifiedAt()).isEqualTo(checkedAt);
+        assertThat(verified.verificationDetail()).contains("call-back");
+
+        // rules 5: the person, recorded apart from the credential. "Who established this identity"
+        // cannot be answered by a password a team shares, so the two are asserted separately.
+        assertThat(audit.recent(ENTITY, 200)).hasSizeGreaterThan(before)
+                .anySatisfy(entry -> {
+                    assertThat(entry.action()).isEqualTo("RIGHTS_REQUEST_VERIFIED");
+                    assertThat(entry.targetId()).isEqualTo(request.requestId());
+                    assertThat(entry.actorId()).isEqualTo("arjun@uds.example");
+                    assertThat(entry.clientId()).isEqualTo("compliance-console");
+                });
+    }
+
+    @Test
+    @DisplayName("another entity's session cannot verify a request it does not own")
+    void verificationIsEntityScoped() {
+        // Layer one has nothing to read here: the route carries a request id and no entityId, in
+        // the path or the query. So isolation on this path is layer two alone — rights_request is
+        // inside V13's protected set and the update runs under the session claim.
+        //
+        // The first draft of this test called the route as `matrix-console` and asserted a
+        // non-2xx. It passed the wrong way round: the application connects as
+        // `uds_consent_owner` under test, and a table's owner is not subject to its policies, so
+        // the write succeeded and proved the opposite of what the name claimed. That is the same
+        // trap LedgerAppendOnlyIT fell into this phase — a refusal only means something as
+        // `uds_consent_app` — and it is why this runs the store's own statement as that role.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        SingleConnectionDataSource dataSource = new SingleConnectionDataSource(
+                POSTGRES.getJdbcUrl(), "uds_consent_app", "uds_consent_app", true);
+        dataSource.setDriverClassName(org.postgresql.Driver.class.getName());
+        JdbcTemplate asMatrix = new JdbcTemplate(dataSource);
+        asMatrix.queryForObject("select set_config('uds.entity_id', ?, false)", String.class,
+                "MATRIX");
+
+        int updated = asMatrix.update("""
+                update rights_request
+                   set verification_method = 'OPERATOR_ASSERTED',
+                       verified_at = now(),
+                       verification_detail = 'I say I checked'
+                 where request_id = ?
+                   and verification_method = 'UNVERIFIED'
+                """, request.requestId());
+
+        assertThat(updated)
+                .as("a MATRIX session must not reach a DENAVE_IN request")
+                .isZero();
+        assertThat(store.find(request.requestId()).orElseThrow().verification())
+                .isEqualTo(RightsVerificationMethod.UNVERIFIED);
+    }
+
+    @Test
+    @DisplayName("verification is written once, and a second attempt leaves the first intact")
+    void verificationIsNotOverwritten() {
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+        rights.recordVerification(request.requestId(), RightsVerificationMethod.OPERATOR_ASSERTED,
+                null, "employee id checked at the desk", "arjun@uds.example");
+
+        assertThatThrownBy(() -> rights.recordVerification(request.requestId(),
+                RightsVerificationMethod.OPERATOR_ASSERTED, null, "something else entirely",
+                "mallory@uds.example"))
+                .isInstanceOf(RightsService.VerificationAlreadyRecordedException.class);
+
+        // The property, not the exception. A refusal thrown after the write would leave the second
+        // operator's words in the evidence plane and the first operator's gone.
+        assertThat(store.find(request.requestId()).orElseThrow().verificationDetail())
+                .isEqualTo("employee id checked at the desk");
+    }
+
+    @Test
+    @DisplayName("an operator cannot assert the label the platform reserves for itself")
+    void portalTokenCannotBeAsserted() {
+        // PORTAL_TOKEN means a principal redeemed a token the platform minted and checked. Letting
+        // an operator type it would put the platform's own strongest claim behind a human's
+        // say-so, which is the difference between evidence and a label.
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        assertThatThrownBy(() -> rights.recordVerification(request.requestId(),
+                RightsVerificationMethod.PORTAL_TOKEN, null, "I checked", "arjun@uds.example"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("PORTAL_TOKEN");
+
+        assertThat(store.find(request.requestId()).orElseThrow().verification())
+                .isEqualTo(RightsVerificationMethod.UNVERIFIED);
+    }
+
+    @Test
+    @DisplayName("a verification instant outside the request's own life is refused")
+    void theVerificationInstantIsBounded() {
+        Instant received = Instant.now().minus(2, ChronoUnit.DAYS);
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, received);
+
+        // Before the request existed: the platform cannot have checked the identity behind
+        // something it had not received.
+        assertThatThrownBy(() -> rights.recordVerification(request.requestId(),
+                RightsVerificationMethod.OPERATOR_ASSERTED, received.minus(1, ChronoUnit.HOURS),
+                "checked", "arjun@uds.example"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("before the request was received");
+
+        // And in the future, beyond the shared skew window: a claim about a check that has not
+        // happened yet.
+        assertThatThrownBy(() -> rights.recordVerification(request.requestId(),
+                RightsVerificationMethod.OPERATOR_ASSERTED, Instant.now().plus(1, ChronoUnit.HOURS),
+                "checked", "arjun@uds.example"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(store.find(request.requestId()).orElseThrow().verification())
+                .isEqualTo(RightsVerificationMethod.UNVERIFIED);
+    }
+
+    @Test
+    @DisplayName("recording a verification needs a named person, not just a credential")
+    void recordingAVerificationNeedsTheActorHeader() {
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        org.springframework.http.HttpHeaders noActor = new org.springframework.http.HttpHeaders();
+        noActor.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        noActor.set(IntegrationTestClient.SUPPRESS_ACTOR, "true");
+
+        ResponseEntity<String> refused = rest.withBasicAuth("compliance-console", "admin-secret")
+                .exchange("/v1/rights/" + request.requestId() + "/verification", HttpMethod.POST,
+                        new HttpEntity<>(Map.of("method", "OPERATOR_ASSERTED",
+                                "detail", "call-back to the number on file"), noActor),
+                        String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("X-UDS-Actor");
+        // Nothing written. A refusal after the write would record a check attributed to a password.
+        assertThat(store.find(request.requestId()).orElseThrow().verification())
+                .isEqualTo(RightsVerificationMethod.UNVERIFIED);
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private RightsRequestStore.Request file(RightsRequestType type, Jurisdiction jurisdiction,
@@ -527,6 +820,19 @@ class RightsRequestIT extends PostgresIntegrationTest {
         return rights.intake(new RightsService.Intake(ENTITY, "it-rights-" + UUID.randomUUID(),
                 null, null, type, jurisdiction, receivedAt, "filed by integration test",
                 "compliance-console", RightsVerificationMethod.UNVERIFIED, null));
+    }
+
+    /**
+     * Clears the verification gate the way an operator would.
+     *
+     * <p>Every request {@link #file} creates reads {@code UNVERIFIED}, which is correct and is the
+     * state of every request open in production today. Since Phase 18 a disclosing or destructive
+     * right cannot be recorded as {@code FULFILLED} in that state, so a test that closes one has to
+     * say who was checked first — which is the point of the gate rather than an obstacle to it.
+     */
+    private void verify(RightsRequestStore.Request request) {
+        rights.recordVerification(request.requestId(), RightsVerificationMethod.OPERATOR_ASSERTED,
+                null, "call-back to the number already on file", "priya@uds.example");
     }
 
     /**

@@ -165,6 +165,38 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * A disclosing right cannot be closed as fulfilled while nobody recorded who was asking.
+     *
+     * <p>409 like the fulfilment gate beside it, and the two are deliberately distinguishable in
+     * the body. Both refuse the same call for different reasons, and an operator told the wrong one
+     * fixes the wrong thing — so the title names verification, the type is carried as a property,
+     * and the detail names the route that clears it.
+     */
+    @ExceptionHandler(RightsService.VerificationMissingException.class)
+    public ProblemDetail onVerificationMissing(RightsService.VerificationMissingException e) {
+        ProblemDetail problem =
+                ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problem.setTitle("Identity not verified");
+        problem.setProperty("requestType", e.type().name());
+        return problem;
+    }
+
+    /**
+     * Verification has already been recorded on this request.
+     *
+     * <p>409 rather than 200-and-ignore: a caller who thinks they have recorded a check and has
+     * not would otherwise close the request believing the record says something it does not.
+     */
+    @ExceptionHandler(RightsService.VerificationAlreadyRecordedException.class)
+    public ProblemDetail onVerificationAlreadyRecorded(
+            RightsService.VerificationAlreadyRecordedException e) {
+        ProblemDetail problem =
+                ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problem.setTitle("Verification already recorded");
+        return problem;
+    }
+
+    /**
      * A rights request cannot be closed as fulfilled, because a system that had to act has not.
      *
      * <p>409 rather than 400: nothing about the request is malformed and the caller is not wrong to

@@ -134,11 +134,39 @@ did.
   `rights_request.verification_method` says whether the start was `PORTAL_TOKEN`-verified,
   `OPERATOR_ASSERTED`, or `UNVERIFIED`; **`OPERATOR_ASSERTED` requires `X-UDS-Actor`**, because it
   claims a person checked and §5 applies.
-- **`UNVERIFIED` refuses nothing, and that is deliberate.** The label is not a gate: parking requests
-  outside the clock until somebody fills in a field produces the outcome Rule 14(3) actually
-  penalises. Same posture as the empty `fulfilment_target` register — record the silence, never let
+- **`UNVERIFIED` refuses nothing *at intake*, and that is deliberate. Since Phase 18 it refuses the
+  *claim of fulfilment* on a disclosing or destructive right, and the two halves must not be
+  confused.** At intake the label is not a gate: parking requests outside the clock until somebody
+  fills in a field produces the outcome Rule 14(3) actually penalises, and GDPR **Art. 12(2)**
+  forbids refusing to act on a request at all except where the controller cannot identify the
+  principal. Same posture as the empty `fulfilment_target` register — record the silence, never let
   it read as diligence. The migration's default is `UNVERIFIED` for the same reason: labelling
   pre-V30 rows otherwise would write a false statement into evidence.
+  **At closure it is a gate, for six types and deliberately not for three.** `FULFILLED` is refused
+  409 while `verification_method` is `UNVERIFIED` for `ACCESS`, `PORTABILITY`, `ERASURE`,
+  `CORRECTION`, `COMPLETION` and `NOMINATION` — fulfilling those discloses the person's file,
+  destroys it, rewrites it, or hands a third party the standing to do all three, and recording that
+  as discharge of a statutory right with nothing about who was asking is the platform asserting
+  compliance on an identity nobody established. `CONSENT_WITHDRAWAL` and `OPT_OUT_OF_SALE` are
+  **never** gated: a withdrawal by an impostor *stops* processing, and DPDP **s.6(4)** and GDPR
+  **Art. 7(3)** require withdrawing to be as easy as consenting was — consent is a checkbox with no
+  identity check, so a gate fails "comparable ease" on its face. `GRIEVANCE` is ungated on a **risk
+  argument, not a clause**: it is the intake of a complaint, not the disclosure of the complainant's
+  file back to them. **The instinct to apply the gate uniformly is the wrong turn here**, and
+  `RightsRequestIT.anUnverifiedWithdrawalStillCloses` is the test that fails when somebody takes it.
+- **DPDP requires none of the above, and no document may say it does.** Checked against ss.11, 13,
+  15 and Rules 13 and 14: there is no verification obligation. Rule 14(1)(b) is a
+  publish-your-own-requirements duty; s.15 places the duty on the *principal* not to impersonate.
+  The support is GDPR **Art. 12(6)** (*"may request"*, on reasonable doubt — a permission, not a
+  mandate) and **Recital 64** (*"should"*, and specific to access). Same shape as Art. 19: the
+  platform does more than DPDP asks, which is a position to state, not a gap being filled.
+- **Verification is recordable after intake, and written once.** `POST /v1/rights/{id}/verification`,
+  ADMIN, `X-UDS-Actor` required. Write-once is enforced in the `where` clause, not by reading first,
+  so two operators cannot race into a silent overwrite; a second attempt is 409 and the first record
+  stands. `PORTAL_TOKEN` cannot be asserted there — it is the platform's own label for a redeemed
+  token and `PrincipalPortalService` stays its only writer. **The gate is on the claim, not the
+  act**: `GET /v1/admin/evidence/subject/**` is unlinked from any request, so a file can still be
+  disclosed without one ever being opened. `ROADMAP.md` carries that.
 - `/v1/portal/**` is the only unauthenticated write surface. It must answer **byte-identically for a
   known and an unknown identifier** or it is a subject-enumeration oracle against regulated data,
   reachable without a credential. Status reads return status and dates — **never** the evidence

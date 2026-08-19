@@ -3,6 +3,7 @@ package com.uds.consent.ledger.service;
 import com.uds.consent.core.model.ConsentArtefact;
 import com.uds.consent.core.model.ConsentEvent;
 import com.uds.consent.core.model.ConsentEventType;
+import com.uds.consent.core.model.ConsentStatus;
 import com.uds.consent.ledger.store.ConsentArtefactStore;
 import com.uds.consent.ledger.store.ConsentEventStore;
 import com.uds.consent.ledger.store.OutboxStore;
@@ -66,8 +67,18 @@ public class ConsentLedger {
         }
 
         projector.apply(stored);
+        // The payload's status is the subject's state *after* this event, which is the projection's
+        // answer and not the event's own resultingStatus. The two differ for NOTICE_SERVED — a
+        // notice asserts NOT_ASKED about itself and asserts nothing about an existing agreement —
+        // and for any event the projector declines as stale. Publishing the event's value there
+        // told a downstream system the person was not-asked while the ledger said GRANTED, which
+        // is worse than the projection defect Phase 18 fixed, because the two then disagree.
+        ConsentStatus published = artefacts
+                .find(stored.entityId(), stored.subjectId(), stored.purposeCode())
+                .map(ConsentArtefact::status)
+                .orElse(stored.resultingStatus());
         outbox.enqueue(topic, stored.entityId() + '|' + stored.subjectId(),
-                publishablePayload(stored));
+                publishablePayload(stored, published));
         return stored;
     }
 
@@ -108,8 +119,12 @@ public class ConsentLedger {
      * purpose so they can invalidate caches and stop processing; they do not need the notice
      * version, the evidence pointer or the capture method, and sending those would spread
      * consent evidence into systems that have no business holding it.
+     *
+     * <p><b>{@code status} is the projected state after the event, not the event's own
+     * {@code resultingStatus}.</b> See the comment at the call site: for {@code NOTICE_SERVED} the
+     * two disagree, and the event's value is the wrong one to put on the wire.
      */
-    private static Map<String, Object> publishablePayload(ConsentEvent event) {
+    private static Map<String, Object> publishablePayload(ConsentEvent event, ConsentStatus status) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("eventId", event.eventId());
         payload.put("entityId", event.entityId());
@@ -117,15 +132,19 @@ public class ConsentLedger {
         payload.put("purposeCode", event.purposeCode());
         payload.put("purposeVersion", event.purposeVersion());
         payload.put("eventType", event.type().name());
-        payload.put("status", event.resultingStatus().name());
+        payload.put("status", status.name());
         payload.put("channel", event.channel() == null ? null : event.channel().name());
         payload.put("occurredAt", event.occurredAt().toString());
         payload.put("expiresAt", event.expiresAt() == null ? null : event.expiresAt().toString());
         payload.put("sequenceNumber", event.sequenceNumber());
         // Restrictive changes are what downstream systems must act on immediately; flagged so a
         // consumer can prioritise them without having to know the event-type taxonomy.
+        // NOTICE_SERVED is deliberately not restrictive: it records that the person was told, and
+        // restricts nothing. Flagging it restrictive asked every consumer to stop processing on a
+        // notice re-serve, which is the same false statement as publishing NOT_ASKED for it.
         payload.put("restrictive", event.type() != ConsentEventType.GRANTED
-                && event.type() != ConsentEventType.MODIFIED);
+                && event.type() != ConsentEventType.MODIFIED
+                && event.type() != ConsentEventType.NOTICE_SERVED);
         return payload;
     }
 }

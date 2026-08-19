@@ -146,6 +146,44 @@ public class RightsRequestStore {
                 .update();
     }
 
+    /**
+     * Records that somebody established who the requester was, after intake.
+     *
+     * <p>Until Phase 18 there was nowhere to put this. {@link #updateStatus} touches none of the
+     * three verification columns and no other statement did either, so verification was write-once
+     * <em>at intake</em> — an operator who filed a request over the telephone and then called the
+     * principal back on a number already on file had no way to say so. The label was therefore
+     * permanently whatever the intake form happened to carry.
+     *
+     * <p><strong>Write-once, enforced in the statement rather than by reading first.</strong> The
+     * {@code where} clause requires the row still to be {@code UNVERIFIED}; zero rows updated means
+     * somebody has already recorded a verification, and the caller is told rather than silently
+     * overwriting them. A read-then-write would race two operators into exactly that overwrite.
+     * This is evidence about what a person did, and re-recording it is a rewrite.
+     *
+     * <p>The biconditional in V30 — {@code UNVERIFIED} exactly when {@code verified_at is null} —
+     * is satisfied by construction: this only ever moves a row off {@code UNVERIFIED}, and the
+     * instant is written in the same statement.
+     *
+     * @return true when the row was still unverified and has been updated
+     */
+    public boolean recordVerification(String requestId, RightsVerificationMethod method,
+                                      Instant verifiedAt, String detail) {
+        return jdbc.sql("""
+                        update rights_request
+                           set verification_method = :method,
+                               verified_at = :verifiedAt,
+                               verification_detail = :detail
+                         where request_id = :requestId
+                           and verification_method = 'UNVERIFIED'
+                        """)
+                .param("requestId", requestId)
+                .param("method", method.name())
+                .param("verifiedAt", Timestamp.from(verifiedAt))
+                .param("detail", detail)
+                .update() == 1;
+    }
+
     public void acknowledge(String requestId, Instant at) {
         jdbc.sql("update rights_request set acknowledged_at = :at where request_id = :requestId "
                         + "and acknowledged_at is null")

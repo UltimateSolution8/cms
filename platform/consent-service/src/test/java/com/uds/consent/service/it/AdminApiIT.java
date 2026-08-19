@@ -76,7 +76,26 @@ class AdminApiIT extends PostgresIntegrationTest {
      *                         the security consequence.
      */
     private record Route(HttpMethod method, String path, Set<String> allowed,
-                         boolean exercisePositive) {
+                         boolean exercisePositive, String body) {
+
+        Route(HttpMethod method, String path, Set<String> allowed, boolean exercisePositive) {
+            this(method, path, allowed, exercisePositive, "{}");
+        }
+
+        /**
+         * The same, with a body that passes bean validation.
+         *
+         * <p>Needed because {@code @Valid} on a {@code @RequestBody} is resolved <em>before</em>
+         * method security runs, so a route whose DTO has {@code @NotNull} or {@code @NotBlank}
+         * answers 400 to an unauthorised caller and the role check is never reached. The sweep's
+         * "an empty object reaches the handler and comes back 400" holds only where the body is
+         * permissive; here it measured the validator instead of the boundary. Found when
+         * {@code POST /v1/rights/…/verification} joined the table and reported CAPTURE as able to
+         * reach it — it cannot; it was getting a 400 for sending {@code {}}.
+         */
+        static Route postWithBody(String path, String body, String... allowed) {
+            return new Route(HttpMethod.POST, path, Set.of(allowed), true, body);
+        }
 
         static Route get(String path, String... allowed) {
             return new Route(HttpMethod.GET, path, Set.of(allowed), true);
@@ -173,6 +192,16 @@ class AdminApiIT extends PostgresIntegrationTest {
             Route.putSweep("/v1/admin/consent-managers/CM-TEST-0001/status", ADMIN),
             Route.post("/v1/admin/consent-managers/CM-TEST-0001/reconciled", ADMIN),
 
+            // --- Propagation register (V31). Added late to this table, which is the failure the
+            // --- class javadoc above predicts: three routes shipped in Phase 17 and the sweep that
+            // --- exists to catch a route with no annotation did not know they existed.
+            Route.get("/v1/admin/propagation/targets" + E, ADMIN),
+            Route.get("/v1/admin/propagation/gaps" + E, ADMIN),
+            // The PUT's positive direction is exercised by PropagationAdminIT, which can assert the
+            // audit row and the resolved subscription as well as the boundary. Here it would write
+            // a register row into every other suite's entity.
+            Route.putSweep("/v1/admin/propagation/targets", ADMIN),
+
             // --- BreachController: class-level hasRole('ADMIN') ----------------------------------
             Route.post("/v1/admin/breaches", ADMIN),
             Route.get("/v1/admin/breaches" + E, ADMIN),
@@ -235,6 +264,17 @@ class AdminApiIT extends PostgresIntegrationTest {
             // only route in the tree with no test at all, and no test anywhere issued a PATCH, so
             // the verb itself had never been exercised against the security filter chain.
             Route.patch("/v1/rights/api-it-nobody", ADMIN),
+            // Phase 18's two writes on the same path. The verification route is the one that
+            // matters most here: nothing else asserts that `denave-web` — ROLE_CAPTURE, the most
+            // widely distributed credential in the group — cannot write "identity verified" onto
+            // somebody's ACCESS request and thereby clear the gate that exists to stop exactly
+            // that. Found missing by qa-verifier, which is this table's own failure mode again.
+            Route.postWithBody("/v1/rights/api-it-nobody/verification",
+                    "{\"method\":\"OPERATOR_ASSERTED\",\"detail\":\"sweep\"}", ADMIN),
+            Route.postWithBody("/v1/rights/api-it-nobody/fulfilment",
+                    "{\"systemCode\":\"SWEEP\",\"actionType\":\"ATTESTED\","
+                            + "\"status\":\"COMPLETED\",\"evidenceRef\":\"sweep\"}", ADMIN),
+            Route.get("/v1/rights/api-it-nobody/fulfilment", ADMIN),
 
             // --- SnapshotController -------------------------------------------------------------
             Route.get("/v1/snapshot/DENAVE_IN/api-it-nobody", DECISION, CAPTURE, ADMIN),
@@ -397,7 +437,7 @@ class AdminApiIT extends PostgresIntegrationTest {
         // changed.
         HttpEntity<String> request = route.method() == HttpMethod.GET
                 ? new HttpEntity<>(headers)
-                : new HttpEntity<>("{}", headers);
+                : new HttpEntity<>(route.body(), headers);
 
         return rest.withBasicAuth(credential[0], credential[1])
                 .exchange(route.path(), route.method(), request, String.class);
