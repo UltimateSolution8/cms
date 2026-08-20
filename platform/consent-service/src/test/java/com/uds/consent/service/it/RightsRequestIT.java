@@ -813,6 +813,30 @@ class RightsRequestIT extends PostgresIntegrationTest {
                 .isEqualTo(RightsVerificationMethod.UNVERIFIED);
     }
 
+    @Test
+    @DisplayName("a verification instant before the request itself is refused at the wire, 400")
+    void theVerificationInstantIsBoundedOverHttp() {
+        RightsRequestStore.Request request =
+                file(RightsRequestType.ACCESS, Jurisdiction.IN, Instant.now());
+
+        // theVerificationInstantIsBounded covers the same rule at the service layer. Phase 18
+        // recorded the HTTP half as a deviation and did not pay it: the 400 that the API contract
+        // and TRACEABILITY both imply had never crossed the wire, so a change to the exception
+        // mapping would have left the documented status wrong with every test still green.
+        ResponseEntity<String> refused = rest.withBasicAuth("compliance-console", "admin-secret")
+                .postForEntity("/v1/rights/" + request.requestId() + "/verification",
+                        Map.of("method", "OPERATOR_ASSERTED",
+                                "verifiedAt", request.receivedAt().minus(2, ChronoUnit.DAYS)
+                                        .toString(),
+                                "detail", "call-back to the number on file"),
+                        String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("before the request was received");
+        assertThat(store.find(request.requestId()).orElseThrow().verification())
+                .isEqualTo(RightsVerificationMethod.UNVERIFIED);
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private RightsRequestStore.Request file(RightsRequestType type, Jurisdiction jurisdiction,

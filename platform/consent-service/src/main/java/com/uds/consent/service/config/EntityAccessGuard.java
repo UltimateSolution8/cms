@@ -20,6 +20,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -125,7 +126,17 @@ public class EntityAccessGuard extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
-        Optional<String> claim = entityClaim();
+        Optional<String> claim;
+        try {
+            claim = entityClaim();
+        } catch (AmbiguousEntityClaimException e) {
+            // Refused here rather than allowed through to be refused by layer two, because layer
+            // two would not refuse it: an unresolvable claim reaches the session as NULL and V13's
+            // policy passes a NULL claim on purpose. This is the only layer that can see the
+            // ambiguity at all.
+            refuseAmbiguous(response);
+            return;
+        }
 
         // Group level, or unauthenticated (in which case Spring Security is about to refuse it
         // anyway and a second opinion here would only confuse the response).
@@ -168,6 +179,26 @@ public class EntityAccessGuard extends OncePerRequestFilter {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
                 "credential is not authorised for that fiduciary entity");
         problem.setTitle("Cross-entity request refused");
+
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        json.writeValue(response.getOutputStream(), problem);
+    }
+
+    /**
+     * Refuses a token that names more than one fiduciary entity.
+     *
+     * <p>Separate from {@link #refuse} because the two say different things and an operator acting
+     * on them does different work: one is a credential reaching outside its scope, which is a
+     * caller problem; this is a credential whose scope cannot be determined, which is an issuer
+     * configuration problem. Collapsing them would send somebody to read the wrong logs.
+     */
+    private void refuseAmbiguous(HttpServletResponse response) throws IOException {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
+                "this token names more than one fiduciary entity; a credential is scoped to one "
+                        + "entity or to the group, never to a subset");
+        problem.setTitle("Ambiguous entity scope");
 
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
@@ -252,7 +283,10 @@ public class EntityAccessGuard extends OncePerRequestFilter {
 
         if (authentication.getPrincipal() instanceof Jwt token) {
             String claim = token.getClaimAsString(jwt.getEntityClaim());
-            return claim == null || claim.isBlank() ? Optional.empty() : Optional.of(claim);
+            if (claim != null && !claim.isBlank()) {
+                return Optional.of(claim);
+            }
+            return entityFromRoles(token, jwt);
         }
 
         SecurityConfiguration.ApiClientProperties.Client client =
@@ -261,5 +295,77 @@ public class EntityAccessGuard extends OncePerRequestFilter {
             return Optional.empty();
         }
         return Optional.of(client.getEntityId());
+    }
+
+    /**
+     * The fiduciary entity named by an {@code entity.*} role, where the issuer cannot carry a
+     * dedicated claim.
+     *
+     * <p>Entra will not put an arbitrary claim into an access token for a custom API without a
+     * claims-mapping policy and a custom signing key; app roles need neither and are assigned to
+     * people rather than to applications. So {@code entity.DENAVE_IN} arriving in {@code roles} is
+     * how a token from that issuer says which fiduciary its holder may act for.
+     *
+     * <p><strong>Read through {@link JwtRoleConverter#grantedValues} rather than parsed here.</strong>
+     * That is the same reader the authorities go through, so a claim shape this method understood
+     * and the converter did not — or the reverse — is unrepresentable. Rules §2: one resolver.
+     *
+     * <p><strong>Two entity roles are refused.</strong> Not first-wins, because the set's iteration
+     * order would then decide which fiduciary's records a caller reads, and both isolation layers
+     * would agree on the wrong answer. The refusal is an exception rather than an empty Optional
+     * deliberately: empty means <em>group level</em> here, so returning it on an ambiguous token
+     * would widen the grant at precisely the moment the platform is least sure what it should be.
+     */
+    private static Optional<String> entityFromRoles(
+            Jwt token, SecurityConfiguration.ApiClientProperties.Jwt jwt) {
+        String prefix = jwt.getEntityRolePrefix();
+        if (prefix == null || prefix.isBlank()) {
+            return Optional.empty();
+        }
+        List<String> named = JwtRoleConverter.grantedValues(token, jwt).stream()
+                .filter(value -> value.startsWith(prefix))
+                .map(value -> value.substring(prefix.length()))
+                .filter(value -> !value.isBlank())
+                // Upper-cased on the way in, the way propagation_system is upper-cased on both
+                // sides for the same reason. Entity ids are upper case throughout the seed and the
+                // schema; a role written entity.denave_in would otherwise resolve to a value that
+                // matches no entity, fail layer one as a CROSS-ENTITY refusal, and push a claim
+                // into the session that quietly matches nothing on a route with no entity in its
+                // path. It fails closed either way — but the operator is sent to the wrong problem.
+                .map(value -> value.toUpperCase(java.util.Locale.ROOT))
+                .distinct()
+                .toList();
+        if (named.isEmpty()) {
+            return Optional.empty();
+        }
+        if (named.size() > 1) {
+            log.error("token for '{}' names {} fiduciary entities ({}); refusing rather than "
+                            + "choosing one. A credential is scoped to one entity or to the group, "
+                            + "never to a subset.", token.getSubject(), named.size(), named);
+            throw new AmbiguousEntityClaimException(named);
+        }
+        return Optional.of(named.get(0));
+    }
+
+    /**
+     * Raised when a token names more than one fiduciary entity.
+     *
+     * <p>Fails the request closed wherever it surfaces: this filter answers 403, and
+     * {@code EntityScopedDataSource} lets it abort the connection rather than serving an unscoped
+     * one. Both are the same decision — the platform cannot tell which entity was meant, and every
+     * available guess is a disclosure.
+     */
+    public static class AmbiguousEntityClaimException extends IllegalStateException {
+
+        private final transient List<String> entities;
+
+        AmbiguousEntityClaimException(List<String> entities) {
+            super("token names more than one fiduciary entity: " + entities);
+            this.entities = List.copyOf(entities);
+        }
+
+        public List<String> entities() {
+            return entities;
+        }
     }
 }

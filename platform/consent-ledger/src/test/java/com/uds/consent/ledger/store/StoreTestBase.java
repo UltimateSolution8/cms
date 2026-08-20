@@ -25,7 +25,7 @@ import javax.sql.DataSource;
 public abstract class StoreTestBase {
 
     private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            new PostgreSQLContainer<>("postgres:17-alpine")
                     .withDatabaseName("uds_consent")
                     .withUsername("uds_consent_owner")
                     .withPassword("uds_consent_owner");

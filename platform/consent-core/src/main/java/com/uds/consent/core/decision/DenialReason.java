@@ -64,6 +64,22 @@ public enum DenialReason {
     /** The subject is under eighteen and the purpose is not permitted for children (DPDP s.9). */
     CHILD_SUBJECT_RESTRICTED,
 
+    /**
+     * The subject is a child and the consent being relied on records no guardian verification.
+     *
+     * <p>Distinct from {@link #CHILD_SUBJECT_RESTRICTED}, and the distinction is the point. That one
+     * says the purpose is closed to children however consent was given (DPDP s.9(3)). This one says
+     * the purpose <em>is</em> open to children and the consent relied upon was not captured as
+     * verifiably given by a parent or lawful guardian — s.9(1) with Rule 10, where the diligence is
+     * the obligation and the consent is only its output.
+     *
+     * <p>The live case is a subject whose minority was established <strong>after</strong> capture.
+     * The capture path already refuses an unevidenced parental consent; nothing asked the question
+     * again at the decision, so a consent given when nobody knew the person was a minor kept being
+     * acted upon after they were recorded as one.
+     */
+    CHILD_GUARDIAN_NOT_EVIDENCED,
+
     /** The consent on record was given against a notice version since materially superseded. */
     NOTICE_SUPERSEDED,
 

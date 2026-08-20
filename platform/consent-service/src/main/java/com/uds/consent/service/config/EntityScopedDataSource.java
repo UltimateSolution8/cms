@@ -59,7 +59,23 @@ public class EntityScopedDataSource extends DelegatingDataSource {
     }
 
     private Connection scope(Connection connection) throws SQLException {
-        String claim = EntityAccessGuard.currentEntityClaim(clients, jwt).orElse("");
+        String claim;
+        try {
+            claim = EntityAccessGuard.currentEntityClaim(clients, jwt).orElse("");
+        } catch (RuntimeException e) {
+            // The connection is already checked out. currentEntityClaim can now throw — a token
+            // naming two fiduciary entities is refused rather than resolved — and an unchecked
+            // exception escaping here would leave the connection neither closed nor returned to
+            // the pool. Rare, because the guard refuses such a token before any store runs; a
+            // permanent leak on an error or async dispatch if it were not caught.
+            //
+            // Closed rather than served, for the same reason the SQLException branch below closes:
+            // a connection whose scope cannot be determined is one that answers as group level.
+            log.error("could not resolve the entity scope for a connection; closing it rather "
+                    + "than serving an unscoped one: {}", e.toString());
+            connection.close();
+            throw e;
+        }
         try (PreparedStatement statement =
                      connection.prepareStatement("select set_config('uds.entity_id', ?, false)")) {
             statement.setString(1, claim);

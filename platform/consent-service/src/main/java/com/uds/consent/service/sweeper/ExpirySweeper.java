@@ -80,7 +80,8 @@ public class ExpirySweeper {
             String purposeCode = key[2];
 
             ledger.record(new ConsentEvent(
-                    UUID.randomUUID().toString(), entityId, subjectId, purposeCode, 0,
+                    UUID.randomUUID().toString(), entityId, subjectId, purposeCode,
+                    ConsentEvent.NO_PURPOSE_VERSION_ASSERTED,
                     ConsentEventType.EXPIRED, null, null, null, null,
                     CaptureMethod.NOT_APPLICABLE, null, null, null,
                     asOf, null, null, ActorType.SYSTEM, "expiry-sweeper",

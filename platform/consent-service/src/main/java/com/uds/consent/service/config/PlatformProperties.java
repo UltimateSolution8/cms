@@ -366,6 +366,39 @@ public class PlatformProperties {
         /** Chains verified per page during the integrity sweep. */
         private int integrityPageSize = 200;
 
+        /**
+         * Whether the projection reconciliation sweep runs.
+         *
+         * <p>On by default. It is the only control that looks at {@code consent_artefact} — the row
+         * every decision reads — and asks whether it still agrees with the chain that produced it.
+         */
+        private boolean projectionReconciliationEnabled = true;
+
+        /** Subjects per page in the reconciliation sweep. Same shape and reason as the integrity one. */
+        private int projectionReconciliationPageSize = 200;
+
+        /**
+         * Divergences named individually in the log before the sweep summarises the rest.
+         *
+         * <p>A projector defect affects every subject at once, so an unbounded log would be
+         * megabytes and the first line — the one an operator needs — would be buried.
+         */
+        private int projectionReconciliationReportLimit = 20;
+
+        /**
+         * Divergences the sweep <strong>retains</strong> for the entity-scoped admin route.
+         *
+         * <p>The cap is on what is held, never on what is counted. A systemic projector defect
+         * produces one divergence per artefact, and an unbounded {@code ArrayList} of them sits in
+         * memory on the instance that ran the sweep until the next one replaces it. The count in
+         * {@code /projection/last} stays exact — a capped count would make a systemic defect look
+         * smaller than it is, which is the opposite of what the control is for.
+         */
+        private int projectionDivergenceCap = 500;
+
+        /** Divergences returned per page by {@code GET /v1/admin/projection/divergences}. */
+        private int projectionDivergencePageSize = 100;
+
         /** Whether the rights-request SLA sweep runs. Disabled in tests so time is controlled. */
         private boolean rightsSlaEnabled = true;
 
@@ -412,6 +445,46 @@ public class PlatformProperties {
 
         public void setIntegrityPageSize(int integrityPageSize) {
             this.integrityPageSize = integrityPageSize;
+        }
+
+        public boolean isProjectionReconciliationEnabled() {
+            return projectionReconciliationEnabled;
+        }
+
+        public void setProjectionReconciliationEnabled(boolean projectionReconciliationEnabled) {
+            this.projectionReconciliationEnabled = projectionReconciliationEnabled;
+        }
+
+        public int getProjectionReconciliationPageSize() {
+            return projectionReconciliationPageSize;
+        }
+
+        public void setProjectionReconciliationPageSize(int projectionReconciliationPageSize) {
+            this.projectionReconciliationPageSize = projectionReconciliationPageSize;
+        }
+
+        public int getProjectionReconciliationReportLimit() {
+            return projectionReconciliationReportLimit;
+        }
+
+        public int getProjectionDivergenceCap() {
+            return projectionDivergenceCap;
+        }
+
+        public void setProjectionDivergenceCap(int projectionDivergenceCap) {
+            this.projectionDivergenceCap = projectionDivergenceCap;
+        }
+
+        public int getProjectionDivergencePageSize() {
+            return projectionDivergencePageSize;
+        }
+
+        public void setProjectionDivergencePageSize(int projectionDivergencePageSize) {
+            this.projectionDivergencePageSize = projectionDivergencePageSize;
+        }
+
+        public void setProjectionReconciliationReportLimit(int projectionReconciliationReportLimit) {
+            this.projectionReconciliationReportLimit = projectionReconciliationReportLimit;
         }
 
         public boolean isRightsSlaEnabled() {

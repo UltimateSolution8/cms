@@ -35,7 +35,49 @@ public class OutboxStore {
                 .update();
     }
 
-    /** Oldest unpublished messages, for the relay to drain. */
+
+    /**
+     * Claims a batch for publication, skipping rows another relay is already working on.
+     *
+     * <p><strong>Must be called inside a transaction</strong>, and the lock is held until it
+     * commits — which is the point. {@code OutboxRelay} publishes and marks within that
+     * transaction, so two relays draining concurrently take disjoint batches.
+     *
+     * <p>Until this existed the relay took no lock at all and, unlike the seven sweepers, no
+     * {@code SweepLock} — while {@code deploy/k8s/deployment.yaml} ships three replicas. Three
+     * relays therefore drained the same batch every two seconds: every subscriber received each
+     * event up to three times, and {@code webhook_delivery} — the row that proves a withdrawal
+     * arrived — carried up to three rows per attempt. An evidence table that over-counts is a poor
+     * foundation for a proof.
+     *
+     * <p><strong>{@code skip locked} rather than a {@code SweepLock}</strong>, deliberately. An
+     * advisory lock would serialise fan-out onto one instance, which is a throughput change; this
+     * lets all three replicas work, on disjoint rows.
+     *
+     * <p>Historical duplicate {@code webhook_delivery} rows are not de-duplicated. They are
+     * append-only evidence and three replicas really did make three attempts; the correction
+     * belongs at the cause, which is here.
+     */
+    public List<PendingMessage> claimUnpublished(int limit) {
+        return jdbc.sql("""
+                        select id, topic, event_key, payload, attempts from event_outbox
+                         where published_at is null
+                         order by created_at asc
+                         limit :limit
+                           for update skip locked
+                        """)
+                .param("limit", limit)
+                .query((rs, n) -> new PendingMessage(rs.getLong("id"), rs.getString("topic"),
+                        rs.getString("event_key"), rs.getString("payload"), rs.getInt("attempts")))
+                .list();
+    }
+
+    /**
+     * Reads pending messages without claiming them.
+     *
+     * <p>For inspection and for tests. The relay uses {@link #claimUnpublished(int)}; a reader that
+     * uses this one to drive publication reintroduces the triplication that method exists to close.
+     */
     public List<PendingMessage> fetchUnpublished(int limit) {
         return jdbc.sql("""
                         select id, topic, event_key, payload, attempts from event_outbox

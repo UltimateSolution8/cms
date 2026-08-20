@@ -4,6 +4,7 @@ import com.uds.consent.core.decision.DecisionOutcome;
 import com.uds.consent.core.decision.DecisionRequest;
 import com.uds.consent.core.decision.DecisionResponse;
 import com.uds.consent.core.decision.DenialReason;
+import com.uds.consent.core.model.CaptureMethod;
 import com.uds.consent.core.model.ConsentArtefact;
 import com.uds.consent.core.model.ConsentStatus;
 import com.uds.consent.core.model.FailureBehavior;
@@ -217,6 +218,23 @@ public class PolicyEngine {
                 artefacts.find(request.entityId(), request.subjectId(), request.purposeCode());
 
         if (artefactOpt.isEmpty()) {
+            // A child with no consent record at all cannot be let through by a fail-open purpose.
+            //
+            // This branch ran BEFORE gate 11a for one build, and the result was exactly backwards:
+            // a child whose consent WAS recorded but not PARENTAL_VERIFIED was denied, and the same
+            // child with NO record was allowed — the gate refusing the weaker case and permitting
+            // the stronger one. Found by qa-verifier, not by the plan or the suite.
+            //
+            // s.9(1) is about processing a child's data, and a fail-open default is a decision to
+            // process in the absence of a record. It is a reasonable default for an adult and it
+            // cannot be one here, because "no record" is precisely the state in which no guardian
+            // was ever verified.
+            if (isChild) {
+                return deny(request, purpose.version(),
+                        DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED,
+                        "subject is under eighteen and no consent record exists, so no parent or "
+                                + "lawful guardian has been verified");
+            }
             // No record at all is not the same as an indeterminate one. A purpose that fails open
             // is permitted; anything else denies for want of a record, which is the honest reason.
             if (purpose.failureBehavior() == FailureBehavior.FAIL_OPEN) {
@@ -234,6 +252,41 @@ public class PolicyEngine {
         if (status != ConsentStatus.GRANTED) {
             return deny(request, artefact.purposeVersion(), reasonFor(status),
                     "consent status is " + status);
+        }
+
+        // Gate 11a — a child's consent must record who verified the guardian.
+        //
+        // Gate 7 asked whether the purpose is closed to children (s.9(3)) and this asks the other
+        // half: for a purpose that IS open to them, was the consent being relied upon captured as
+        // verifiably given by a parent or lawful guardian? DPDP s.9(1) requires that "before
+        // PROCESSING any personal data of a child" — not before capturing it — and Rule 10 makes
+        // the diligence the obligation, with the consent as its output.
+        //
+        // CaptureValidator already refuses a submission that claims parental consent without
+        // recording how the guardian was verified, so the capture path was closed. The live hole
+        // was a subject whose minority is established AFTER capture (subject_age_assertion): the
+        // consent was captured when nobody knew, and nothing asked again. docs/TRACEABILITY.md
+        // graded s.9(1) satisfied on the capture-time refusal alone.
+        //
+        // PARENTAL_VERIFIED on the artefact is a sound proxy for "the diligence is in the chain",
+        // and that was checked rather than assumed: ConsentCaptureService.capture is the only path
+        // that puts a submission's captureMethod on an event, it validates first and returns
+        // rejected before recording, and every other write path stamps NOT_APPLICABLE. So the
+        // value cannot reach the projection without having passed DpdpModule's Rule 10 check.
+        //
+        // Placed AFTER gate 10 deliberately, which is what scopes it. A basis needing no consent
+        // record — s.7(i) employment, legal obligation — has already returned, so this never
+        // refuses processing that consent was not carrying in the first place. s.9(1) read at its
+        // widest would reach those too; the narrower reading is taken on the standing instruction
+        // not to over-engineer the legal-policy side, and is recorded as a position rather than as
+        // what the clause compels.
+        // Reuses gate 7's answer rather than asking the store a second time: isChildAt is a
+        // query on the decision path, and the question has not changed since it was asked.
+        if (isChild && artefact.captureMethod() != CaptureMethod.PARENTAL_VERIFIED) {
+            return deny(request, artefact.purposeVersion(),
+                    DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED,
+                    "subject is under eighteen and the consent relied upon records no verified "
+                            + "parent or lawful guardian");
         }
 
         DecisionResponse allowed = DecisionResponse.allow(purpose.code(), artefact.purposeVersion(),

@@ -45,12 +45,12 @@ cd platform && mvn -B verify
 Online. **Not `-o`** — the offline habit was mistaken for a constraint for three planning passes; §3
 of the plan file records it. Testcontainers needs a running Docker daemon and nothing else.
 
-Baseline: **555 tests, 0 failures** — 33 core + 38 ledger + 113 policy + 5 service unit + 366 service
-IT. *A drop in the count is a deleted test, not a passing build.* The count comes from the
+Baseline: **610 tests, 0 failures** — 33 core + 38 ledger + 113 policy + 8 service unit + 418 service
+IT, on **PostgreSQL 17**. *A drop in the count is a deleted test, not a passing build.* The count comes from the
 `TEST-*.xml` `tests` attributes, never the failsafe `.txt` summaries — `consent-ledger` reports
 `Tests run: 0` there.
 
-Next Flyway migration is **`V32`**, in `platform/consent-ledger/src/main/resources/db/migration/`.
+Next Flyway migration is **`V35`**, in `platform/consent-ledger/src/main/resources/db/migration/`.
 
 ---
 
@@ -105,7 +105,15 @@ delivery record to the plan file.
 
 **One session per phase or per subsidiary.** Denave's DenCRM integration and the washroom-hygiene
 integration must never share a context; independent workstreams pollute each other's. Worktrees are
-the stronger form of this and are **not** available yet: `git worktree add` carries no uncommitted
-changes and this tree has ~180 uncommitted files over two commits, so a worktree today would be an
-empty early checkout. The day a commit is authorised, `git worktree add ../uds-<phase> -b <phase>`
-becomes the right answer.
+the stronger form of this and are **available now**, which they were not for the first eighteen
+phases. This file said until Phase 19 that `git worktree add` carries no uncommitted changes and
+that "this tree has ~180 uncommitted files over two commits, so a worktree today would be an empty
+early checkout". **Both clauses stopped being true when the tree was committed**, and the file
+listing "a premise recorded in prose and never re-checked" as defect class 1 was carrying one. So
+`git worktree add ../uds-<phase> -b <phase>` is the right answer — the phases are on commits now.
+
+**This paragraph has since been wrong in the other direction**: Phase 19 replaced the stale claim
+with "three commits, clean working tree", which stopped being true within the hour, because that
+phase then changed fifty files. **Do not record the tree's state here at all.** `git status` is the
+check; a worktree branches from the last commit, so whatever is uncommitted stays in this tree and
+is exactly what you would be leaving behind.

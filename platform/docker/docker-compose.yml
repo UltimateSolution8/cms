@@ -15,7 +15,16 @@ name: uds-consent
 services:
 
   postgres:
-    image: postgres:16-alpine
+    # 17 to match the hosted database (Supabase runs 17.6), so a developer is not the only person
+    # ever to exercise the schema on 16. Nothing in the migration tree is version-sensitive — no
+    # extensions, partitioning is 13+, advisory locks and `for update skip locked` are stable — and
+    # that was a premise until the suite ran against 17 and made it a measurement.
+    #
+    # Bumping this on a machine that already has a 16 data directory will not start: PostgreSQL
+    # refuses a data dir written by a different major version. `docker compose down -v` first. The
+    # volume is a development database and is droppable by definition; anything in it that is not
+    # is a bar this project has already decided nobody crosses.
+    image: postgres:17-alpine
     container_name: uds-consent-postgres
     environment:
       POSTGRES_DB: uds_consent
@@ -45,6 +54,58 @@ services:
       # to fix.
       - -c
       - log_min_duration_statement=100
+
+  # An identity provider for development and for the by-hand walkthrough. Behind a profile, so
+  # nothing starts it by default:  docker compose --profile auth up -d keycloak
+  #
+  # The platform's own JWT behaviour is covered by JwtAuthenticationIT, which mints tokens
+  # in-process against a generated key pair and needs no container. What has never been exercised
+  # by anything is the *discovery* path — issuer-uri to openid-configuration to JWKS, then the iss
+  # and aud validators against a token an issuer actually signed. That is what this is for, and
+  # what KeycloakIssuerIT asserts.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: uds-consent-keycloak
+    profiles: ["auth"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      # 8081, because 8080 is the application. A developer who binds the identity provider to the
+      # port the platform serves on gets a token endpoint that answers and an API that does not,
+      # which is a confusing five minutes.
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    volumes:
+      - ./keycloak/uds-realm.json:/opt/keycloak/data/import/uds-realm.json:ro
+      # A second realm that exists only so a token from a DIFFERENT issuer can be
+      # produced. It claims the same audience deliberately, so refusing it proves
+      # JwtIssuerValidator rather than the audience check standing in for it.
+      - ./keycloak/other-realm.json:/opt/keycloak/data/import/other-realm.json:ro
+    healthcheck:
+      # Keycloak 26 ships no curl and no wget, and its management endpoints are on a second
+      # port. This goes through the JVM's own client and probes the REALM rather than the
+      # server, because a realm import that fails leaves the server perfectly healthy and the
+      # realm absent — which is the failure that would otherwise be discovered by a token
+      # request three minutes later.
+      test:
+        - CMD
+        - /opt/keycloak/bin/kcadm.sh
+        - config
+        - credentials
+        - --server
+        - http://localhost:8080
+        - --realm
+        - master
+        - --user
+        - admin
+        - --password
+        - admin
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
 
   # Kafka-compatible broker for the outbox relay. Optional: the service defaults to the logging
   # publisher and needs no broker at all until a downstream system depends on hearing about

@@ -781,3 +781,395 @@ the notice the person was most recently shown.
 
 Serve a notice for a purpose with no artefact and the behaviour is unchanged — a `NOT_ASKED`
 artefact is created, which is the s.7(i) workforce path the route exists for.
+
+---
+
+## 17. The controls that watch the controls (Phase 19)
+
+*Run by hand against the Compose stack on 19 August 2026. Every response below is real output.*
+
+### 17.1 A verified chain, and a projection that disagrees with it
+
+Capture a consent the ordinary way (§3), then edit the projection behind the ledger's back — which
+is what a projector defect and a database edit both look like from outside:
+
+```bash
+docker exec uds-consent-postgres psql -U uds_consent_owner -d uds_consent \
+  -c "update consent_artefact set status='WITHDRAWN' where subject_id='byhand-p19';"
+```
+
+The integrity sweep is entirely happy:
+
+```bash
+curl -s -u compliance-console:dev -X POST http://localhost:8080/v1/admin/integrity/sweep
+```
+
+```json
+{ "chainsChecked": 1, "chainsWithFindings": 0, "chainsTampered": 0 }
+```
+
+**That is the blind spot, not a bug in the sweep.** `last_event_hash` is *copied* onto the artefact
+rather than derived from its status, so an artefact whose status is wrong stays perfectly
+self-consistent and every hash verifies. The chain really is intact. Nothing was asking the other
+question:
+
+```bash
+curl -s -u compliance-console:dev -X POST http://localhost:8080/v1/admin/projection/sweep
+```
+
+```json
+{ "subjectsChecked": 1, "divergent": 1, "fabricated": 0,
+  "retentionTruncated": false, "retentionCap": 500 }
+```
+
+> **Changed in Phase 20.** This response carried the subject identifiers inline when §17 was
+> written. It is a group-wide route, so it now returns counts and names nobody — a per-entity ADMIN
+> credential, which the configuration supports, would otherwise have read every fiduciary's
+> subjects from it. The identifiers moved to the entity-scoped route below, and §18 walks the
+> current shape end to end.
+
+```bash
+curl -s -u compliance-console:dev \
+  "http://localhost:8080/v1/admin/projection/divergences?entityId=DENAVE_IN"
+```
+
+```json
+{ "entityId": "DENAVE_IN", "sweptAt": "…", "offset": 0, "returned": 1,
+  "divergences": [{
+    "entityId": "DENAVE_IN", "subjectId": "byhand-p19",
+    "purposeCode": "MKT_OUTBOUND_CALL",
+    "impliedStatus": "GRANTED", "projectedStatus": "WITHDRAWN",
+    "detail": "status: chain implies GRANTED, projection holds WITHDRAWN"
+  }],
+  "truncation": [] }
+```
+
+And this is why it matters rather than being tidy — the engine is already acting on it:
+
+```bash
+curl -s -u athena-dialer:dev -X POST http://localhost:8080/v1/evaluate \
+  -H 'Content-Type: application/json' -d '{"entityId":"DENAVE_IN","subjectId":"byhand-p19",
+       "purposeCode":"MKT_OUTBOUND_CALL","channel":"VOICE_CALL","jurisdiction":"IN",
+       "applicationId":"ATHENA_DIALER"}'
+```
+
+`decision: None, reason: CONSENT_WITHDRAWN` — for a person who never withdrew.
+
+`/actuator/health` carries both facts side by side, which is the clearest single view of the gap:
+
+```json
+"ledgerIntegrity": "VERIFIED",
+"projectionDivergences": 1
+```
+
+**Do not re-project on a finding.** `OPERATIONS.md` §3.3a is the procedure: a projector defect and a
+direct edit produce an identical divergence and only one is a security incident, so establishing
+which comes first. There is deliberately no route that repairs.
+
+### 17.2 Which sweeps have actually run
+
+```bash
+curl -s -u compliance-console:dev http://localhost:8080/v1/admin/sweeps
+```
+
+```json
+[ { "sweepName": "expiry", "lastStartedAt": "2026-08-19T03:49:30.215302Z",
+    "lastFinishedAt": "2026-08-19T03:49:30.217764Z",
+    "lastRanOn": "e8288abc956a", "lastOutcome": "OK" }, … ]
+```
+
+Four rows on a stack that has been up minutes: the interval-driven jobs. The nightly ones —
+integrity, projection reconciliation, partition maintenance, re-confirmation — are **absent**, and
+absence is the answer, not a gap in the report.
+
+On the management port that is visible as the sweeps having **no series at all**:
+
+```
+uds_consent_sweep_last_run_age_seconds{sweep="expiry"}                    219.0
+uds_consent_sweep_last_run_age_seconds{sweep="outbox-relay"}               25.0
+uds_consent_sweep_last_run_age_seconds{sweep="integrity"}                   NaN
+uds_consent_sweep_last_run_age_seconds{sweep="projection-reconciliation"}   NaN
+```
+
+`NaN` renders as absent to Prometheus, which is why `alerts.yaml` needs `SweepHasNeverRun` on
+`absent()` beside `SweepHasNotRun` on the threshold. **A gauge reporting an unrun sweep as `0`
+would read as "finished just now"** — the healthiest possible value for the exact condition being
+watched.
+
+### 17.3 A system code the register cannot resolve
+
+```bash
+curl -s -u compliance-console:dev -X PUT http://localhost:8080/v1/admin/propagation/targets \
+  -H 'Content-Type: application/json' -H 'X-UDS-Actor: ayoosh@uds.example' \
+  -d '{"entityId":"DENAVE_IN","topic":"uds.consent.events","systemCode":"DENCRM_TYPO",
+       "mandatory":true,"active":true,"description":"by hand"}'
+```
+
+`400`:
+
+```json
+{
+  "title": "Invalid request",
+  "detail": "unknown system code: DENCRM_TYPO; DENAVE_IN recognises []. Declare it at
+             PUT /v1/admin/propagation/systems first — a code the register cannot resolve
+             produces a daily gap row for a system that may be perfectly reachable, and
+             propagation_gap is append-only."
+}
+```
+
+Before V33 that `PUT` succeeded, joined nothing, and wrote a daily unmet-obligation row for a system
+that might have been receiving every event. Loud and closed, at the moment it is typed — the posture
+`fulfilment_target` always had and propagation lacked.
+
+---
+
+## 18. The triage nobody had walked (Phase 20)
+
+§17 showed the projection sweep finding an edited artefact. This is the rest of `OPERATIONS.md`
+§3.3a — the procedure written in Phase 19 that had never been performed — run end to end against the
+Compose stack on 19 August 2026, with what it found.
+
+### 18.1 The finding, and what each control says about it
+
+Capture a consent, then edit the projection behind the ledger's back:
+
+```bash
+docker compose exec -T postgres psql -U uds_consent_owner -d uds_consent \
+  -c "update consent_artefact set status='WITHDRAWN' where subject_id='$SUBJECT';"
+```
+
+The chain is untouched, so the integrity sweep is content:
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET -X POST http://localhost:8080/v1/admin/integrity/sweep
+{"chainsChecked":2,"chainsWithFindings":0,"chainsTampered":0}
+```
+
+The projection sweep is not:
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET -X POST http://localhost:8080/v1/admin/projection/sweep
+{"subjectsChecked":2,"divergent":1,"fabricated":0,"retentionTruncated":false,"retentionCap":500}
+```
+
+**Note what that answer does not contain: a subject.** It is a group-wide route, so it carries
+counts and names nobody. The subjects come from the entity-scoped read, which is one call per
+affected entity:
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET \
+  "http://localhost:8080/v1/admin/projection/divergences?entityId=DENAVE_IN"
+```
+```json
+{ "entityId": "DENAVE_IN", "offset": 0, "returned": 1,
+  "divergences": [ { "subjectId": "p20-…", "purposeCode": "MKT_OUTBOUND_CALL",
+                     "impliedStatus": "GRANTED", "projectedStatus": "WITHDRAWN",
+                     "detail": "status: chain implies GRANTED, projection holds WITHDRAWN" } ],
+  "truncation": [] }
+```
+
+And the reason any of this matters, in one call — the decision the platform is taking *right now*
+for a person who never withdrew:
+
+```bash
+curl -u athena-dialer:dev -X POST http://localhost:8080/v1/evaluate -d '{…}'
+{"outcome":"DENY","reason":"CONSENT_WITHDRAWN","explanation":"consent status is WITHDRAWN"}
+```
+
+Every hash verifies. That is the whole argument for the control.
+
+### 18.2 What the walk found that the plan did not
+
+**`fabricated` was reporting the page size, not the count.** Seeding 20,000 artefacts with no chain
+and running the sweep returned `"fabricated": 200` — because `findFabricated` takes a limit and its
+`size()` was being reported as the finding. A bulk insert of forged `GRANTED` rows is the single
+worst thing that can happen to this table, and it would have read as a small, stable problem however
+large it got. Counted by its own query now, with
+`ProjectionReconciliationIT.theFabricatedCountIsNotThePageSize` pinning it — falsified against the
+old code before it was trusted.
+
+**`perf/seed.sql` writes artefacts with no events, and the reconciler now catches exactly that.**
+`CLAUDE.md` warns that fabricated consent is *"a ledger defect no integrity sweep will ever catch,
+because the hashes will be perfectly valid"*. That is still true of the integrity sweep and is no
+longer true of the platform: the projection sweep reported all 19,500 of them. The warning stands —
+never run that seed against a database you cannot drop — but the detection gap it describes is
+closed.
+
+**A 76× query-planning defect, caused by RLS.** `CAPACITY.md` §8.3. The fabricated-row count
+degraded to a nested loop as the application role, because the row-level security predicate is
+opaque to the planner. 3,438 ms to 45 ms.
+
+### 18.3 What the walk did not settle
+
+§3.3a step 3 — *re-project the affected chains* — was **not** performed. There is deliberately no
+route that does it, so the step is a person with database access making a decision, and rehearsing
+that on a laptop against a fabricated subject would prove nothing about doing it under incident
+pressure on real data. The step stays a written procedure, and this section is honest that only
+steps 1 and 2 have been walked.
+
+---
+
+## 19. A real issuer, and the claim that scopes it (Phase 23)
+
+Every walkthrough above this one authenticates with Basic. This one uses a token from an actual
+OpenID Provider, because `ROADMAP.md` has carried *"an IdP to point at"* as its largest open item for
+eight phases and the criterion it set is specific:
+
+> A token from the group's provider reaches `/v1/evaluate`, its `entity_id` claim scopes it to one
+> entity (proven by a second entity's record returning 403), and `admin_audit_event.actor_id` carries
+> a human from the token with **no `X-UDS-Actor` sent**.
+
+Every response below is real output from a run on 20 August 2026 against the Compose stack.
+
+### 19.1 Start the issuer
+
+```bash
+cd platform/docker && docker compose --profile auth up -d keycloak
+```
+
+Behind a profile, so an ordinary `docker compose up` does not pull a 450 MB image. The realm is
+imported from `platform/docker/keycloak/uds-realm.json`, which is committed — the realm is the
+artefact, not a page of instructions for clicking through a UI.
+
+Then set `OIDC_ISSUER_URI=http://localhost:8081/realms/uds` and `OIDC_AUDIENCE=uds-consent-api`
+before starting the application. **Without the issuer the resource server is never registered**, a
+`Bearer` header is ignored entirely, and the Basic filter answers 401 — which looks exactly like a
+bad token and is not. **And with it set, the IdP becomes a start-up dependency**: the decoder fetches
+the discovery document when the bean is created, so the application will not start while Keycloak is
+down. Both facts are in `OPERATIONS.md` §2.3a.
+
+### 19.2 A machine token reaches the decision route
+
+```bash
+DECISION_TOKEN=$(curl -s -X POST \
+  http://localhost:8081/realms/uds/protocol/openid-connect/token \
+  -d grant_type=client_credentials -d client_id=athena-dialer \
+  -d client_secret=dev-athena-secret | jq -r .access_token)
+
+curl -s -H "Authorization: Bearer $DECISION_TOKEN" -X POST http://localhost:8080/v1/evaluate \
+  -H 'Content-Type: application/json' -d '{
+    "entityId":"DENAVE_IN","purposeCode":"MKT_OUTBOUND_EMAIL",
+    "identifierType":"EMAIL","identifierValue":"nobody@example.com","channel":"EMAIL"}'
+```
+
+```json
+{"decision":"None","reason":"NO_CONSENT_RECORD", ...}
+```
+
+**Note the purpose code.** The `curl` that has been in circulation names `MARKETING_EMAIL`, which is
+not a seeded purpose, so it returns `200 OK` with a `PURPOSE_UNKNOWN` denial — an answer that reads
+like a broken platform and is the platform correctly refusing to decide about something it has never
+been told exists. The seeded code is **`MKT_OUTBOUND_EMAIL`**.
+
+### 19.3 A human token, and the claim that scopes it
+
+`compliance-console` is a public client with direct grants enabled in the development realm only.
+
+```bash
+M=$(curl -s -X POST http://localhost:8081/realms/uds/protocol/openid-connect/token \
+     -d grant_type=password -d client_id=compliance-console -d scope=openid \
+     -d username=matrix.operator -d password=dev | jq -r .access_token)
+echo "$M" | cut -d. -f2 | tr '_-' '/+' | base64 -d | jq '{iss,aud,scope,roles,preferred_username}'
+```
+
+```json
+{
+  "iss": "http://localhost:8081/realms/uds",
+  "aud": "uds-consent-api",
+  "scope": "openid consent.admin",
+  "roles": ["entity.MATRIX"],
+  "preferred_username": "matrix.operator"
+}
+```
+
+**There is no `entity_id` claim on this token, deliberately.** Entra will not put a custom claim into
+an access token for a custom API without a claims-mapping policy and a custom signing key; an app
+role needs neither. `entity.MATRIX` among `roles` says the same thing, read through the *same*
+parser as the authorities, so a claim shape one understood and the other did not is unrepresentable.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $M" \
+  http://localhost:8080/v1/admin/ropa/MATRIX
+```
+
+```
+200
+```
+
+```bash
+curl -s -H "Authorization: Bearer $M" http://localhost:8080/v1/admin/ropa/DENAVE_IN
+```
+
+```json
+{"type":"about:blank","title":"Cross-entity request refused","status":403,
+ "detail":"credential is not authorised for that fiduciary entity"}
+```
+
+**That is the criterion's middle clause, met.** The refusal above is layer one. Layer two is proven
+separately and in the only form that means anything — `KeycloakIssuerIT.theEntityClaimReachesTheDatabaseSession`
+asserts the value of the session variable the RLS policy reads, because an HTTP status alone cannot
+distinguish *"layer two received `MATRIX`"* from *"layer two received nothing and passed
+everything"*. That is rules §2's Phase 11 defect, and it is the only assertion that can see it.
+
+### 19.4 A token naming two entities is refused, never resolved to one
+
+The realm carries a third user, `over.assigned`, holding both `entity.MATRIX` and
+`entity.DENAVE_IN`, for exactly this:
+
+```json
+{"type":"about:blank","title":"Ambiguous entity scope","status":403,
+ "detail":"this token names more than one fiduciary entity; a credential is scoped to one entity
+           or to the group, never to a subset"}
+```
+
+First-wins would have let a `Set`'s iteration order decide which fiduciary a caller reads, and
+**both isolation layers would have agreed on the wrong answer** — which is the shape that makes a
+breach invisible rather than loud.
+
+### 19.5 The audit trail names the person, with no header sent
+
+```bash
+curl -s -X PUT -H "Authorization: Bearer $D" -H 'Content-Type: application/json' \
+  -d '{"entityId":"DENAVE_IN","systemCode":"DENCRM_DEMO","description":"walkthrough","active":true}' \
+  http://localhost:8080/v1/admin/propagation/systems
+```
+
+```json
+{"recorded":true,"systemCode":"DENCRM_DEMO"}
+```
+
+No `X-UDS-Actor` was sent. Under a token it would have been **ignored** if it had been — a claim an
+IdP signed beats a header a client asserted (rules §5).
+
+```sql
+select action, actor_id, client_id, entity_id, target_id
+  from admin_audit_event order by occurred_at desc limit 1;
+```
+
+```
+            action             |    actor_id     |              client_id               | entity_id |  target_id
+-------------------------------+-----------------+--------------------------------------+-----------+-------------
+ PROPAGATION_SYSTEM_CONFIGURED | denave.operator | 7f806813-75b1-419a-8da8-48675f1da341 | DENAVE_IN | DENCRM_DEMO
+```
+
+**`actor_id` is a person's username, taken from `preferred_username` on the token.** That is the
+criterion's last clause, met, and it is the thing Basic auth structurally could not do: under Basic,
+`compliance-console` is one password a team of fifteen shares, and `X-UDS-Actor` is a name the caller
+typed.
+
+`client_id` is the token's `sub` — the credential, kept separate from the person, as §5 requires.
+Note that it is an opaque identifier here: Keycloak's `sub` is a UUID. If `preferred_username` were
+ever absent, `Actor` would fall back to that UUID and write it permanently into an append-only table,
+which is why the platform now logs a WARN naming the claims it inspected when the fallback is
+reached, and why `preferred_username` is item 3 of the Entra checklist in `OPERATIONS.md` §2.3a.
+
+### 19.6 What this does and does not close
+
+**Closed:** the `ROADMAP.md` criterion, on the Keycloak half, in full — including the four things no
+test in this repository had ever exercised before Phase 23: discovery from `issuer-uri`, the JWKS
+fetch, `iss` validation and `aud` validation.
+
+**Not closed:** the Entra half. Every remaining item needs directory rights — `accessTokenAcceptedVersion`,
+the exact `aud` string, the `preferred_username` optional claim, and who assigns `entity.<ID>` to
+whom (`REGULATORY_HANDOFF.md` §8.8). Those are a checklist somebody with tenant-admin runs, and
+saying so is the difference between a criterion met and a criterion asserted.

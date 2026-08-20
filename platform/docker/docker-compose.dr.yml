@@ -34,7 +34,7 @@ services:
   # would make the rehearsal diverge from the deployment in the one dimension the append-only
   # guarantee is built on, which is exactly the substitution this file's header warns against.
   wal-archive-init:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: uds-consent-wal-archive-init
     user: root
     entrypoint: ["sh", "-c", "mkdir -p /wal-archive && chown -R 70:70 /wal-archive"]

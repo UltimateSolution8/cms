@@ -30,7 +30,23 @@ grant connect on database uds_consent to uds_consent_app;
 grant usage on schema public to uds_consent_app;
 alter default privileges in schema public grant select, insert, update, delete on tables to uds_consent_app;
 alter default privileges in schema public grant usage, select on sequences to uds_consent_app;
+alter default privileges in schema public grant execute on functions to uds_consent_app;
 ```
+
+**The `functions` line was missing from this document until Phase 22**, though
+`platform/docker/init/01-application-role.sql` has always carried it. Anybody who provisioned an
+environment from this page rather than from that file produced a database in which the application
+role cannot execute a function — which since `V34` includes `uds_ensure_enforcement_partition`, and
+therefore breaks partition maintenance. `V34` grants `EXECUTE` on that function explicitly rather
+than relying on the default privilege, so an environment built from the old text still works; the
+line is restored because the next function will not think to.
+
+**On a managed database, `for role` is not optional.** `alter default privileges` applies only to
+objects created by the role that declared it, and on a hosted provider the schema owner is the
+provider's own role rather than `uds_consent_owner`. Omit `for role` there and the application role
+holds nothing on every table no migration explicitly granted, which is most of the schema.
+`deploy/hosted/provision.sql` is the hosted form of this section and carries the clause; run it
+rather than adapting the block above by hand.
 
 `V2__append_only_guards.sql` then revokes `UPDATE`, `DELETE` and `TRUNCATE` from that role on
 `consent_event`, `admin_audit_event`, `notice_version`, `notice_translation` and `purpose_version`.
@@ -54,6 +70,14 @@ owner would hand the running application the ability to edit history that the wh
 to remove.
 
 ### 1.2 Residency
+
+**The development database provisioned in Phase 22 is in `ap-southeast-1` (Singapore), and this
+section is the reason that is a development database only.** The region was resolved from the
+host's IPv6 address against AWS's published ranges rather than taken from a dashboard label. A
+Supabase project's region cannot be changed after creation, so the production database is a new
+project in an Indian region and not a migration of that one. `ROADMAP.md` carries it on UDS's side
+with the check that closes it. `V3` seeds `DENAVE_IN` with `residency_region = 'ap-south-1'`, so
+the platform's own record already says where that entity's data is meant to live.
 
 Host the DPDP-scoped ledger in India (`ap-south-1` / Central India). DPDP Rule 15 is a blacklist
 model — transfer is permitted except where the government restricts it, and no restricted list has
@@ -203,10 +227,75 @@ carry weight beyond authentication:
 
 | Claim | Effect | Failure mode if the issuer omits it |
 |---|---|---|
-| `entity_id` | The fiduciary this token may act for, enforced by both isolation layers | **Absent means group level.** A token intended to be scoped to Denave silently reads every entity in the group — the same grant an unscoped client credential has, and the reason this row is in a table rather than a footnote |
+| `entity_id`, **or an `entity.<ID>` app role** | The fiduciary this token may act for, enforced by both isolation layers. Microsoft Entra will not put a custom claim into an access token for a custom API without a claims-mapping policy and a custom signing key; an app role needs neither and is assigned to people rather than to applications, so `entity.DENAVE_IN` among `roles` says the same thing. The prefix is `uds.consent.security.jwt.entity-role-prefix` | **Absent means group level.** A token intended to be scoped to Denave silently reads every entity in the group — the same grant an unscoped client credential has, and the reason this row is in a table rather than a footnote. **Two `entity.*` roles on one token are refused 403**, never resolved to one of them. See §12.8.1 for the command that checks a real token |
 | `preferred_username` | The human, written to `admin_audit_event.actor_id`; falls back to `email`, then `sub` | An opaque `sub` in the audit trail identifies a person only to whoever still has the directory, which years into an inquiry is not a safe assumption |
 
 Under a token, `X-UDS-Actor` is **ignored entirely** — see §12.5.
+
+### 2.3a Two issuers — the development realm, and the Entra checklist
+
+**Development and CI: Keycloak, from a committed realm.** `platform/docker/keycloak/uds-realm.json`
+is the artefact; a realm somebody clicked together in a UI is a realm nobody can reproduce.
+
+```bash
+cd platform/docker && docker compose --profile auth up -d keycloak
+```
+
+Issuer `http://localhost:8081/realms/uds`, audience `uds-consent-api`. Four clients matching
+`scope-roles` — `athena-dialer` (service account, `consent.decision`, secret `dev-athena-secret`),
+`denave-web` and `compliance-console` (public, PKCE), `consent-manager-relay`. Both entity paths are
+exercised deliberately: `athena-dialer` carries a hardcoded `entity_id`, and the `matrix.operator`
+user carries the realm role `entity.MATRIX` so the app-role form is proven too. A third user,
+`over.assigned`, holds **two** `entity.*` roles and must be refused 403.
+
+**Set `OIDC_ISSUER_URI` or the resource server is never registered at all** and a Bearer header is
+silently ignored — `SecurityConfiguration` builds the JWT chain only when an issuer or a public key
+is configured, which is deliberate (a decoder with nothing to validate against is a 500 on the
+authentication path) and is the first thing to check when a good token gets a 401.
+
+**Note that the issuer becomes a start-up dependency.** `JwtDecoders.fromIssuerLocation` fetches the
+discovery document when the bean is created, so with `OIDC_ISSUER_URI` set and the IdP unreachable
+the **application will not start**. That is the right failure — starting with authentication silently
+disabled would be worse — but it means the IdP is on the critical path for a rollout, and a
+deployment ordering that brings the platform up before its issuer will crash-loop.
+
+---
+
+**Production: Microsoft Entra ID.** The platform side shipped in Phase 21; what remains needs
+directory rights. Five items, in this order, and each has a failure mode that looks like a platform
+fault:
+
+1. **`accessTokenAcceptedVersion: 2`** in the application manifest. This is the most likely single
+   cause of a token that "should work" and does not: the default issues v1.0 tokens whose `iss` is
+   `https://sts.windows.net/<tenant>/`, and `JwtIssuerValidator` compares that **verbatim** against
+   the configured v2.0 URL and refuses. There is no normalisation and there is deliberately no
+   trusted-issuer list.
+2. **Decode a real token before configuring anything else** — §12.8.1 carries the command, which is
+   base64url-safe and does not swallow its own errors. `aud` is either the App ID URI
+   (`api://<guid>`) or the bare client-id GUID depending on how the registration was made, and the
+   audience check is an exact `List.contains`. Set `OIDC_AUDIENCE` to the string **literally in the
+   token**, not to the one the portal displays.
+3. **Add `preferred_username` as an optional claim on the *resource* registration.** Entra does not
+   emit it in an access token for a custom API unless it is asked to. Without it every administrative
+   mutation writes a pairwise `sub` — meaningless outside the directory, different per application —
+   permanently into `admin_audit_event`. The platform logs a WARN naming the claims it inspected when
+   the fallback is reached, so this is visible on day one rather than at an inquiry.
+4. **Client credentials emit `roles`, not `scp`.** An app-to-app integration such as the dialer
+   arrives on the app-role claim; a delegated browser flow arrives on `scp` and may carry `roles`
+   alongside it. The platform takes the **union** across `[scope, scp, roles]` for exactly this
+   reason, so nothing needs configuring here — but a first-non-empty reading would 403 a valid
+   delegated admin token, and that is why the union is not defensive padding.
+5. **The entity is an app role, `entity.<ID>`, assigned per user** — not a claims-mapping policy.
+   Keying on the token's application (`azp`) was considered and rejected: in a browser flow that is
+   one value for every human who signs into the console, so the isolation boundary would become
+   which application you authenticated to. **Who assigns that role, and to whom, is a decision UDS
+   owns** — `REGULATORY_HANDOFF.md` §8.8, because no test in this repository can execute a directory
+   assignment and `RowLevelSecurityIT` passes while the assignment is wrong.
+
+**None of the above has been proven against a live Entra tenant.** Every token in the test suite is
+minted in-process against a generated key pair, and the Keycloak suite proves discovery, JWKS, `iss`
+and `aud` against a real issuer that is not this one. Items 1, 2 and 3 are precisely the three no
+test here can reach.
 
 ### 2.4 Configuration that changes behaviour silently
 
@@ -295,6 +384,64 @@ curl -u compliance-console:… -X POST http://localhost:8080/v1/admin/integrity/
 Record the result in the restore log. A sweep that was run and passed is evidence; a sweep that
 was assumed is nothing.
 
+### 3.3a The projection, which the chain does not cover
+
+**A verified chain says nothing about `consent_artefact`, and until Phase 19 nothing checked it.**
+`last_event_hash` is *copied* onto the artefact rather than derived from its `status`, so an
+artefact whose status is wrong stays perfectly self-consistent and §3.1's sweep verifies it happily.
+That is not hypothetical: two of this programme's headline defects were projection defects that
+every control passed. And the artefact is what the decision engine reads, what a receipt renders,
+and what the evidence bundle hands the Board.
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET -X POST http://localhost:8080/v1/admin/projection/sweep
+```
+
+`GET /v1/admin/projection/last` returns the same report without re-running it, and the sweep runs
+nightly at 03:15 — **after** the integrity sweep at 02:15, deliberately: if the chain itself is
+broken, "the projection disagrees with the chain" is the second finding and not the first.
+
+**Both of those return counts and name nobody.** The sweep is group-wide by necessity — it
+re-derives every chain in the database — and a group-wide route carrying subject identifiers sits
+outside both isolation layers at once: `EntityAccessGuard` has no entity to read, and RLS is not in
+the path because the sweep, not the request, gathered the rows. The subjects are one call per
+affected entity:
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET \
+  "http://localhost:8080/v1/admin/projection/divergences?entityId=DENAVE_IN"
+```
+
+That route is scoped by its `entityId` parameter, so a credential scoped to one fiduciary cannot
+read another's. It is paged, and it declares what it left out in a `truncation` entry — including
+the separate case where the **sweep** kept fewer divergences than it found. **The count on
+`/projection/last` is always exact**; only the retained sample is capped, because a capped count
+would make a systemic projector defect — the case the control exists for — look smaller than it is.
+
+**On a finding, do not re-project.** The sweep reports and never repairs, and the reason is the
+whole of §3.3 applied one table over: a projector defect and a direct `UPDATE` of
+`consent_artefact` produce an *identical* divergence, and only one of them is a security incident.
+Re-projecting erases the distinction before anybody has established which it was.
+
+1. Take the counts from `/projection/last`, then the detail from `/projection/divergences` for each
+   entity in question — it names subject, purpose, both statuses and every field that differs.
+2. Run §3.1's integrity sweep for those subjects. A broken chain makes this a security incident;
+   an intact one makes it a projector defect or an edit, and `admin_audit_event` plus the database
+   audit log are where that is decided.
+3. Only then re-project, by replaying the affected chains. There is deliberately no route that does
+   this: it is a decision with a person's name against it, and the sweep exists to make the decision
+   possible, not to make it automatically.
+
+**A zero here is meaningful only if the sweep ran.** `GET /v1/admin/sweeps` says when it last did,
+on whichever replica won the lock.
+
+**Steps 1 and 2 have been walked; step 3 has not.** Performed 19 August 2026 against the Compose
+stack and recorded in `WALKTHROUGH.md` §18, including the two defects the walk found — `fabricated`
+was reporting the page size rather than the count, and the count query degraded to a nested loop
+under RLS (`CAPACITY.md` §8.3). Step 3 is deliberately unrehearsed: there is no route that
+re-projects, so it is a person with database access making a decision, and rehearsing that against
+a fabricated subject on a laptop would prove nothing about doing it under incident pressure.
+
 ### 3.3 Never repair by editing
 
 There is no supported procedure for correcting a consent event, and that is the point. Consent is
@@ -315,6 +462,7 @@ worthless.
 | Breach SLA | `sweeper.breach-sla-interval` | 5 min | §9. Raises the two-stage Rule 7 obligations as they fall due. Five minutes rather than fifteen because the first leg is "without delay" and a quarter-hour of quiet is a quarter-hour of it |
 | Retention | `sweeper.retention-interval` | 6 h | Proposes retention actions; **never deletes**. `sweeper.retention-notice-lead-time` (default 7 days) is the Rule 8 pre-erasure notice window |
 | Re-confirmation | `sweeper.reconfirmation-interval` | 12 h | Korea only. Raises the Network Act Enforcement Decree Art. 62-3 two-year re-confirmation queue for KR entities. Disable with `sweeper.reconfirmation-enabled`; `sweeper.reconfirmation-batch-size` (default 500) bounds one pass |
+| Projection reconciliation | `sweeper.projection-reconciliation-cron` | 03:15 daily | §3.3a. Re-derives every artefact from its chain and reports what disagrees. **Reports, never repairs** |
 | Partition maintenance | `sweeper.partition-cron` | 03:40 daily | Provisions `enforcement_decision` partitions three months ahead and detaches past the retention ceiling. **Absent from this table until Phase 17**, which is why the sentence below counted six sweeps against seven sweepers — the job nobody listed is the one whose silent failure has no symptom for a quarter, and then every denial fails to record |
 
 Every job in this table has an `-enabled` flag of the same shape (`sweeper.expiry-enabled` and so
@@ -322,20 +470,74 @@ on) and all of them are now carried explicitly in `application.yml`. They were n
 re-confirmation properties were absent from the file entirely, so an operator disabling sweeps by
 editing the block they could see would have left the Korean one running.
 
+### 4.0b Has anything quietly stopped?
+
+Until Phase 19 **nothing recorded that any sweep had run**, and that is the worst-shaped fault this
+platform has: a dead `ExpirySweeper` writes no `EXPIRED` events and the evidence plane goes quietly
+incomplete while every decision stays correct. No error, no failed request, no alert — only a
+growing absence.
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET http://localhost:8080/v1/admin/sweeps
+```
+
+One row per sweep: when it last started, when it last finished, **which replica ran it**, and
+whether that run threw. Read it against §4's table — a job in the table with no row here has never
+run on this deployment.
+
+- `last_finished_at` null with an old `last_started_at` means the sweep **died mid-run**, which is
+  a different fault from one that never started and wants a different response.
+- `last_outcome = FAILED` means it is scheduled and broken. A missing row means nothing is
+  scheduling it at all.
+- The record is written by whichever instance won the lock, into the database all replicas share —
+  it has to be, because §4.0's advisory lock means only one of three ever runs a given job.
+
+**It records that a job *ran*, not that it *worked*, and the difference matters.** `last_outcome`
+is `OK` whenever the body returned without throwing — so a sweep whose query has silently stopped
+matching anything, because a batch size was misconfigured or a predicate stopped selecting after a
+migration, records a clean run for as long as that lasts. This is deliberate and it is a real limit:
+there is no generic way to know that a sweep *should* have found something, because the expectation
+is different for every one of them. What `sweep_run` closes is the fault it was built for — a job
+that is not running at all — and reading an `OK` as "this control is working" is reading more into
+it than it says. Where a sweep's output can be watched, watch the output: `uds_consent_outbox_pending`,
+`uds_consent_projection_divergent` and `uds_consent_propagation_uncovered` are those watches.
+
+**The row tracks the *scheduled* job, not a manual trigger.** `POST /v1/admin/projection/sweep` and
+`POST /v1/admin/integrity/sweep` run the sweep body directly and deliberately do not take the lock —
+a hand-triggered sweep that silently skipped because another replica held the lock would be worse
+than useless. So running one by hand does not refresh its `sweep_run` row, and the gauge will still
+read stale. That is the right answer for an alert asking "is the schedule working", and it is worth
+knowing before somebody runs a sweep by hand and wonders why the alert did not clear.
+
+Two alert rules watch this: `SweepHasNotRun` on the age gauge, and `SweepHasNeverRun` on its
+`absent()`. Both are needed, because a sweep that has never run has **no series at all** and a
+threshold rule cannot see it. The gauge deliberately reports no value rather than zero for that
+case: zero renders as "finished just now", which is the healthiest possible reading of the exact
+condition being watched.
+
 ### 4.0 Leader election, and its silent failure mode
 
 **The outbox relay is not one of these, and the arithmetic here was wrong twice over.** This
 sentence said "six" against seven sweepers, and the table above listed seven *jobs* only because
 partition maintenance was missing from it — so two errors happened to look consistent. Both are
-fixed above. The substantive point: the relay takes **no** lock, so all three replicas
-drain the same batch every two seconds — every subscriber receives each event up to three times and
-`webhook_delivery` carries up to three rows per attempt. The class javadoc concedes duplicate
-delivery for the crash window; systematic triplication as the steady state was described nowhere.
-`propagation_gap` is idempotent under this by its daily unique key rather than by a lock, and
-`for update skip locked` on `fetchUnpublished` is the real fix — scheduled on `ROADMAP.md` as its own
-change, because putting the relay under `SweepLock` would serialise fan-out onto one instance.
+fixed above. The substantive point, **and it was a live defect until Phase 19**: the relay takes no
+`SweepLock`, and until `OutboxStore.claimUnpublished` existed it took no lock at all — so all three
+replicas drained the same batch every two seconds, every subscriber received each event up to three
+times, and `webhook_delivery` carried up to three rows per attempt. The class javadoc conceded
+duplicate delivery for the *crash window*; systematic triplication as the steady state was described
+nowhere.
 
-All **seven sweeps** take a PostgreSQL **session advisory lock** (`pg_try_advisory_lock`) before doing
+The relay now claims its batch with **`for update skip locked`**, inside the transaction that
+publishes it, so the three replicas take disjoint rows and all three keep working. It still takes no
+`SweepLock` and deliberately so — that would serialise fan-out onto one instance, which is a
+throughput change and not a correctness one. `propagation_gap` remains idempotent by its daily
+unique key rather than by any lock.
+
+**Historical duplicate `webhook_delivery` rows are not de-duplicated and will not be.** They are
+append-only evidence and three replicas really did make three attempts; a delivery count spanning
+the change reads high for that reason, and the correction belonged at the cause.
+
+All **eight sweeps** take a PostgreSQL **session advisory lock** (`pg_try_advisory_lock`) before doing
 anything. Two replicas otherwise page on-call twice for the same statutory breach, and send a
 principal two pre-erasure notices for the same record. A sweep that does not get the lock does
 nothing and says so at DEBUG — that is the normal case on every instance but one.
@@ -351,6 +553,46 @@ pins both the exclusivity and the release-after-a-throwing-sweep.
 `RightsSlaSweeper` output appears in the log for an hour, or `uds.consent.outbox.pending` rises
 steadily, assume nothing is running rather than that there is nothing to run. `select * from
 pg_locks where locktype = 'advisory'` names the holding backend.
+
+### 4.0c The propagation vocabulary, and the read that joins the two artefacts
+
+**A mistyped `system_code` used to write permanent false evidence.** The register joined
+`propagation_target.system_code` to `webhook_subscription.system_code` as free text, so a target for
+`DENCRM` against a subscription somebody named `DENCRM_PROD` never matched — and the reconciler
+recorded a mandatory obligation as unmet, every day, in an **append-only** table, for a system that
+was receiving every event perfectly well.
+
+Both sides now reference a declared vocabulary and the database refuses the rest:
+
+```bash
+curl -u compliance-console:$ADMIN_SECRET \
+  "http://localhost:8080/v1/admin/propagation/systems?entityId=DENAVE_IN"
+```
+
+**This changed an existing route, and nothing in the contract shows it.** `PUT /v1/admin/subscriptions`
+now validates its `system_code` too — which still defaults to `upper(subscriptionId)` when the field
+is omitted. So any tool or runbook that registers a subscription without first declaring
+`UPPER(<subscriptionId>)` in the vocabulary gets a **400** on its next run. `docs/openapi.json` is
+additions-only, so the pin shows nothing. Declare the codes an environment already uses before
+deploying V33 to it.
+
+`PUT` the same path to declare one. **Declare before you target** — a `PUT` naming an undeclared
+code is refused 400 and the message lists what the entity does recognise, so the mismatch is caught
+at the moment it is typed. Retire with `active: false`; a code is never deleted, because the
+`propagation_gap` rows naming a decommissioned system have to stay readable.
+
+A subscription's `system_code` is settable independently of its id. Before it was, an operator whose
+subscription was called `DENCRM_PROD` had no route at all to make it join a `DENCRM` target except
+by deleting and recreating the subscription — which discards the `webhook_delivery` history that
+proves withdrawals reached that system. Fixing a configuration mistake must not cost the evidence
+that the system was working.
+
+**`GET /v1/admin/propagation/targets` answers "is this system current?" in one call.** Alongside each
+target's resolved subscription it now carries the last delivery outcome, its instant, and the count
+of attempts since the last success — plus a `needsAttention` list. That is the join §4.0a's two
+artefacts previously left to an operator to do by hand: a configuration error lands in
+`propagation_gap`, and a system that is merely *down* lands nowhere near it, because the delivery
+throws, the message stays unpublished and the reconciler never runs for it.
 
 ### 4.0a Propagation reconciliation — and the two artefacts that answer different questions
 
@@ -646,9 +888,15 @@ Before a deployment is considered production-ready:
       degraded console, it is a broken one. Confirm the console populates it from the signed-in
       user and not from a constant. **Not required once the console holds a bearer token**, where
       the human comes from a signed claim and this header is ignored (§12.5)
-- [ ] If OIDC is configured: the issuer's client registrations set **`entity_id`** on every scoped
-      credential. **Absent means group level** — a token intended for Denave reads every entity in
-      the group, through both isolation layers, silently (§2.3)
+- [ ] If OIDC is configured: every scoped credential carries **`entity_id`** *or* an
+      **`entity.<ID>` app role**. **Absent means group level** — a token intended for Denave reads
+      every entity in the group, through both isolation layers, silently. Decode a real token and
+      look; do not infer it from the registration (§2.3, §12.8.1)
+- [ ] If OIDC is configured: a real token carries **`preferred_username`** (or `email`). Entra does
+      not emit it for a custom API without an optional claim, and the fallback writes an opaque
+      `sub` into an append-only audit table that cannot be corrected (§12.8.1)
+- [ ] If a browser client exists: **`uds.consent.security.cors.allowed-origins`** lists its exact
+      origin. Empty means the portal and any console are unreachable from a browser (§12.8)
 - [ ] Rate limits reviewed against expected traffic (§12). They are **per instance**: N replicas
       allow N times the configured numbers in aggregate
 - [ ] Liveness and readiness pointed at `/actuator/health/liveness` and
@@ -1230,3 +1478,59 @@ Traces join them when tracing is on: `traceId` and `spanId` sit beside `correlat
 replacing it. The correlation id is the **caller's** — it survives outside the trace system and it
 is the one a Denave engineer quotes in a support thread — so a deployment running without a
 collector loses nothing it had.
+
+### 12.8 Browser clients — CORS, and the two things to check before one is deployed
+
+Until Phase 21 this platform had no CORS configuration at all. That was the correct configuration
+for the callers it had — every one of them a server sending an `Authorization` header, none of them
+subject to a preflight. It also meant a data principal could not reach `/v1/portal/**` from the only
+client they have, so DPDP Rule 14(1)'s *published means* was published and unusable.
+
+**Enabling it.** `uds.consent.security.cors.allowed-origins`, or `CORS_ALLOWED_ORIGINS`, as a
+comma-separated list of **exact** origins including scheme and port. Empty is off, and off is
+correct for any environment with no browser client. There is no wildcard, and adding one would be a
+change to make deliberately rather than to reach for: the list is the record of which browser
+applications exist.
+
+```bash
+CORS_ALLOWED_ORIGINS=https://console.uds.example,https://privacy.denave.com
+```
+
+**The filter runs at `DEFAULT_FILTER_ORDER - 20`, ahead of the pre-authentication rate limiter.**
+If you find yourself moving it into the security chain, read `CorsConfiguration`'s javadoc first —
+a 429 written by `PreAuthRateLimitFilter` carries no `Access-Control-Allow-Origin`, so a
+rate-limited browser client is told its origin is wrong. `CorsIT.preflightsOutrunTheFloodCeiling`
+fails if the order changes.
+
+**CORS is not authorisation.** It decides which origins a browser will let read a response. It
+decides nothing about who may call, and an allowed origin with no credential is still 401.
+
+#### 12.8.1 Two checks before a console is deployed, both of which fail silently
+
+**One — does the token carry an entity?** A token with neither an `entity_id` claim nor an
+`entity.<ID>` app role is **group level** and reads every fiduciary in the group. Nothing refuses it
+and nothing looks wrong. Decode a real token from the configured issuer and look:
+
+```bash
+# A JWT payload is base64URL and unpadded. Plain `base64 -d` fails on both counts, and
+# on macOS the 2>/dev/null in the obvious one-liner swallows the error and leaves
+# json.tool reporting a parse failure on empty input — which sends the reader to debug
+# the token rather than the command.
+python3 -c "import base64,json,sys;p=sys.argv[1].split('.')[1];\
+print(json.dumps(json.loads(base64.urlsafe_b64decode(p+'='*(-len(p)%4))),indent=2))" \
+  "$TOKEN"
+```
+
+Expect `entity_id`, or `entity.<ID>` among `roles`, on any credential that is meant to be scoped to
+one subsidiary. A token naming two entities is refused 403 `Ambiguous entity scope` — that is an
+identity-provider misconfiguration, not a transient error.
+
+**Two — does the token carry a human?** `admin_audit_event.actor_id` takes the person from
+`preferred_username`, then `email`, then `sub`. **Microsoft Entra does not put `preferred_username`
+into an access token for a custom resource API** unless it is added as an optional claim on that
+app registration. Without it, the first administrative change made from a console writes an opaque
+pairwise identifier — different per application, meaningless outside the directory — into an
+append-only table that cannot be corrected. Two years later "who authorised this" is answerable only
+by somebody who still has the directory and that registration's mapping.
+
+Check the same decoded token for `preferred_username` before the console is given to anybody.

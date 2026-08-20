@@ -3,6 +3,7 @@ package com.uds.consent.service.it;
 import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.PropagationGapStore;
 import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.service.events.OutboxRelay;
 import org.junit.jupiter.api.DisplayName;
@@ -51,6 +52,9 @@ class PropagationChannelIT extends PostgresIntegrationTest {
     private static final String TOPIC = "uds.consent.events";
 
     @Autowired
+    private PropagationSystemStore propagationSystems;
+
+    @Autowired
     private PropagationTargetStore targets;
 
     @Autowired
@@ -76,8 +80,10 @@ class PropagationChannelIT extends PostgresIntegrationTest {
         // A subscription that MATCHES the target, so NO_SUBSCRIPTION is ruled out and the choice is
         // genuinely between the two remaining reasons. Without this the test would pass against a
         // reconciler that never consults the publisher at all.
+        declare(system.toUpperCase(java.util.Locale.ROOT));
         webhooks.upsert(system, ENTITY, TOPIC, "http://127.0.0.1:1/hook", "secret", true,
                 "matched but unobservable under the log publisher");
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "channel fixture");
 
         drain(enqueue());
@@ -100,6 +106,7 @@ class PropagationChannelIT extends PostgresIntegrationTest {
         // nothing is subscribed, the platform knows nobody was reachable regardless of publisher.
         // Ordering matters — checking the channel first would mask every unregistered system.
         String system = "CHANIT_" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "unregistered under log");
 
         drain(enqueue());
@@ -149,5 +156,17 @@ class PropagationChannelIT extends PostgresIntegrationTest {
             }
         }
         return List.of();
+    }
+
+    /**
+     * Declares a system code before it is used on either side of the propagation join.
+     *
+     * <p>{@code V33} put a foreign key on {@code propagation_system} from both
+     * {@code propagation_target} and {@code webhook_subscription}, so a code the entity has not
+     * declared is refused by the database rather than silently producing a daily gap row for a
+     * system that may be perfectly reachable. Fixtures declare theirs the way an operator would.
+     */
+    private void declare(String systemCode) {
+        propagationSystems.upsert(ENTITY, systemCode, "test fixture", true);
     }
 }

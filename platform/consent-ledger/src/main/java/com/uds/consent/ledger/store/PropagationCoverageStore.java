@@ -83,4 +83,46 @@ public class PropagationCoverageStore {
     /** A system that must be told about a consent change and that nothing can currently reach. */
     public record Uncovered(String entityId, String topic, String systemCode) {
     }
+
+    /**
+     * Entities with at least one uncovered mandatory target.
+     *
+     * <p>Bounded by the number of fiduciaries — fifteen — which is why it can be a health detail
+     * where a per-entity metric label could not. The uncovered gauge is deliberately group-wide to
+     * keep cardinality off a series read on every scrape, and the consequence was that the critical
+     * alert named no entity and the responder's first step was fifteen calls. This is the answer
+     * that does not cost cardinality.
+     */
+    public List<String> uncoveredEntities() {
+        return jdbc.sql("""
+                        select distinct t.entity_id
+                          from propagation_target t
+                         where t.mandatory and t.active
+                           and not exists (
+                               select 1 from webhook_subscription s
+                                where s.entity_id = t.entity_id and s.topic = t.topic
+                                  and s.system_code = t.system_code and s.active)
+                         order by t.entity_id
+                        """)
+                .query(String.class)
+                .list();
+    }
+
+    /**
+     * Mandatory active targets whose delivery the configured publisher can never evidence.
+     *
+     * <p>Zero unless something is registered. {@code webhook_delivery} is written by the webhook
+     * publisher and by nothing else, so under the shipped {@code log} default the register can be
+     * fully "covered" while the platform has no way to observe that anyone received anything — a
+     * set of instruments indistinguishable from full coverage. The publisher is not this store's
+     * business, so the caller supplies whether the channel can evidence delivery.
+     */
+    public long unobservableTargets(boolean channelEvidencesDelivery) {
+        if (channelEvidencesDelivery) {
+            return 0;
+        }
+        return jdbc.sql("select count(*) from propagation_target where mandatory and active")
+                .query(Long.class)
+                .single();
+    }
 }

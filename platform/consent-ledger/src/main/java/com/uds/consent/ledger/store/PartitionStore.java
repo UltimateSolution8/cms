@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import javax.sql.DataSource;
+import java.sql.Date;
 import java.time.LocalDate;
 
 /**
@@ -15,14 +16,30 @@ import java.time.LocalDate;
  * release every quarter whose entire content is four {@code CREATE TABLE} statements — which is a
  * release nobody reviews, and eventually one nobody remembers to cut.
  *
- * <p>The application role cannot do this. Partition creation runs as the owner, the same role
- * Flyway uses, so a deployment that has correctly separated the two will find this failing with a
- * permission error rather than silently succeeding. That is the right way round: see
- * {@code OPERATIONS.md} for the grant, which is narrow — {@code CREATE} on the schema, nothing
- * more.
+ * <p>The application role cannot do this, and for four phases this class issued the DDL through it
+ * anyway. Creating a partition requires <em>ownership of the parent</em> — not {@code CREATE} on
+ * the schema, which is what this javadoc used to claim, pointing at a grant in {@code OPERATIONS.md}
+ * that has never existed. So {@code PartitionMaintenanceSweeper}
+ * failed on every pass in any deployment whose two roles were genuinely separate, and nothing saw
+ * it because the Compose stack and every integration test connect as the owner.
+ *
+ * <p>Creation now goes through {@code uds_ensure_enforcement_partition}, a {@code SECURITY DEFINER}
+ * function introduced in {@code V34} with the parent table hardcoded. {@code V34}'s header carries
+ * the argument for that shape over the obvious alternative — a second, owner-credentialled data
+ * source inside the application, which would bypass every V13 policy for whatever else picked the
+ * bean up.
+ *
+ * <p>The reads below need no such treatment: {@code SELECT} on a partition reaches the application
+ * role through the provisioning script's default privileges.
  */
 @Repository
 public class PartitionStore {
+
+    /**
+     * The only parent with a registered maintenance function. Named rather than inlined so the
+     * refusal above and any future second function are visibly one decision.
+     */
+    private static final String ENFORCEMENT_DECISION = "enforcement_decision";
 
     private final JdbcClient jdbc;
 
@@ -33,30 +50,33 @@ public class PartitionStore {
     /**
      * Ensures a partition exists for one month.
      *
+     * <p>The function this delegates to also revokes {@code UPDATE}, {@code DELETE} and
+     * {@code TRUNCATE} on the partition it creates. The parent's revoke does not reach a child:
+     * PostgreSQL checks DML privileges on the relation named in the query, and the provisioning
+     * script's {@code alter default privileges} grants all four on anything the owner creates. The
+     * row triggers still refuse the write, so this is the second of two layers rather than the only
+     * one — {@code V34}'s header records the measurement that established which.
+     *
+     * @param table the parent. Must be {@code enforcement_decision}: the function hardcodes its
+     *              table deliberately, so a second partitioned table needs a second function, and
+     *              failing loudly here is how that gets noticed rather than silently skipped
      * @return whether it was created. False means it already existed, which is the ordinary case
      *         on every pass after the first and is not worth logging
      */
     public boolean ensureMonthlyPartition(String table, LocalDate month) {
-        LocalDate start = month.withDayOfMonth(1);
-        String name = table + "_" + start.getYear() + "_"
-                + String.format("%02d", start.getMonthValue());
-
-        Boolean exists = jdbc.sql("select exists (select 1 from pg_class where relname = :name)")
-                .param("name", name)
-                .query(Boolean.class)
-                .single();
-        if (Boolean.TRUE.equals(exists)) {
-            return false;
+        if (!ENFORCEMENT_DECISION.equals(table)) {
+            throw new IllegalArgumentException(
+                    "no partition-maintenance function is registered for '" + table
+                            + "'. Partition creation runs through a SECURITY DEFINER function "
+                            + "whose parent table is hardcoded (V34); a new partitioned table "
+                            + "needs its own function in its own migration.");
         }
 
-        // Identifiers are derived from a date, not from any caller input, so there is nothing here
-        // an attacker could shape. Written as a formatted statement because PostgreSQL takes no
-        // parameters in DDL — and the bound-parameter habit is worth breaking loudly rather than
-        // quietly, hence this comment.
-        jdbc.sql("create table " + name + " partition of " + table
-                        + " for values from ('" + start + "') to ('" + start.plusMonths(1) + "')")
-                .update();
-        return true;
+        Boolean created = jdbc.sql("select uds_ensure_enforcement_partition(:month)")
+                .param("month", Date.valueOf(month.withDayOfMonth(1)))
+                .query(Boolean.class)
+                .single();
+        return Boolean.TRUE.equals(created);
     }
 
     /**

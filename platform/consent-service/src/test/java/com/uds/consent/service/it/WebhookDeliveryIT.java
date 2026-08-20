@@ -2,6 +2,7 @@ package com.uds.consent.service.it;
 
 import com.sun.net.httpserver.HttpServer;
 import com.uds.consent.ledger.store.OutboxStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.service.events.OutboxRelay;
 import org.junit.jupiter.api.AfterEach;
@@ -54,6 +55,9 @@ class WebhookDeliveryIT extends PostgresIntegrationTest {
     private static final String ENTITY = "DENAVE_IN";
     private static final String TOPIC = "uds.consent.events";
     private static final String SECRET = "webhook-suite-shared-secret";
+
+    @Autowired
+    private PropagationSystemStore propagationSystems;
 
     @Autowired
     private WebhookStore webhooks;
@@ -214,6 +218,7 @@ class WebhookDeliveryIT extends PostgresIntegrationTest {
      */
     private String subscribe() {
         String subscriptionId = "hook-webhook-delivery-it";
+        declare(subscriptionId.toUpperCase(java.util.Locale.ROOT));
         webhooks.upsert(subscriptionId, ENTITY, TOPIC,
                 "http://localhost:" + server.getAddress().getPort() + "/hook",
                 SECRET, true, "webhook suite fixture");
@@ -238,5 +243,17 @@ class WebhookDeliveryIT extends PostgresIntegrationTest {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * Declares a system code before it is used on either side of the propagation join.
+     *
+     * <p>{@code V33} put a foreign key on {@code propagation_system} from both
+     * {@code propagation_target} and {@code webhook_subscription}, so a code the entity has not
+     * declared is refused by the database rather than silently producing a daily gap row for a
+     * system that may be perfectly reachable. Fixtures declare theirs the way an operator would.
+     */
+    private void declare(String systemCode) {
+        propagationSystems.upsert(ENTITY, systemCode, "test fixture", true);
     }
 }

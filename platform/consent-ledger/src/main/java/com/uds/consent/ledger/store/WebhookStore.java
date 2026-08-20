@@ -77,15 +77,40 @@ public class WebhookStore {
      */
     public void upsert(String subscriptionId, String entityId, String topic, String url,
                        String secret, boolean active, String description) {
+        upsert(subscriptionId, entityId, topic, url, secret, active, description, null);
+    }
+
+    /**
+     * Registers a subscription, optionally under a {@code system_code} of the operator's choosing.
+     *
+     * <p><strong>Why the code is settable at all.</strong> It used to be derived as
+     * {@code upper(subscription_id)} on insert and never updated — so an operator whose
+     * subscription was named {@code DENCRM_PROD} had <em>no route</em> to make it join a
+     * {@code DENCRM} propagation target. Their only option was to delete the subscription and
+     * recreate it, which discards its {@code webhook_delivery} history: the append-only evidence
+     * that withdrawals reached that system. Correcting a configuration mistake should not cost the
+     * evidence that the system was working.
+     *
+     * <p>Null keeps the previous behaviour, so every existing caller is unaffected. The code is
+     * upper-cased here because the database checks it on both sides of the join and a rejected
+     * {@code PUT} over letter case would be a needless refusal.
+     */
+    public void upsert(String subscriptionId, String entityId, String topic, String url,
+                       String secret, boolean active, String description, String systemCode) {
+        String code = systemCode == null || systemCode.isBlank()
+                ? subscriptionId.toUpperCase(java.util.Locale.ROOT)
+                : systemCode.toUpperCase(java.util.Locale.ROOT);
         jdbc.sql("""
                         insert into webhook_subscription (subscription_id, entity_id, topic, url,
                                                           secret, active, description, system_code)
                         values (:id, :entityId, :topic, :url, :secret, :active, :description,
-                                upper(:id))
+                                :systemCode)
                         on conflict (subscription_id) do update
                            set url = excluded.url, secret = excluded.secret,
-                               active = excluded.active, description = excluded.description
+                               active = excluded.active, description = excluded.description,
+                               system_code = excluded.system_code
                         """)
+                .param("systemCode", code)
                 .param("id", subscriptionId)
                 .param("entityId", entityId)
                 .param("topic", topic)

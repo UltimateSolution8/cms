@@ -7,6 +7,16 @@ spring:
   flyway:
     enabled: true
     clean-disabled: true
+  datasource:
+    hikari:
+      # Small, deliberately. Every @SpringBootTest whose properties differ gets its own context and
+      # therefore its own pool, all against one container — so the production default multiplied by
+      # the suite count exhausts PostgreSQL's connection limit, and the symptom lands on whichever
+      # context boots last rather than on the change that caused it. No integration test needs
+      # concurrency beyond a handful; the ones that open their own connection to assert a privilege
+      # or an RLS policy do so outside this pool.
+      maximum-pool-size: 6
+      minimum-idle: 1
 
 # Random, like the traffic port. Production pins this to 9090; a fixed port here would collide
 # between the several contexts these suites boot, and the failure — "address already in use" from

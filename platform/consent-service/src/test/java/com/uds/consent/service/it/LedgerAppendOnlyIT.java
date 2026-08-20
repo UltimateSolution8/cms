@@ -61,6 +61,14 @@ class LedgerAppendOnlyIT extends PostgresIntegrationTest {
      * consumption flag are mutable state, not evidence — the evidence is the {@code rights_request}
      * the verification produces — and V29 says so in its own header. A reader comparing this list
      * against the catalogue needs to find that written down rather than read it as an omission.
+     *
+     * <p>{@code sweep_run} (V32) is absent for the same reason and V32's header says so: it records
+     * when each scheduled job last ran, is upserted one row per sweep, and is operational telemetry
+     * rather than evidence about a data principal. The append-only alternative is one row per sweep
+     * per tick — the relay alone would write ~43,000 a day to answer what one row answers.
+     * {@code propagation_system} (V33) is likewise absent: a vocabulary an operator must be able to
+     * retire and re-describe is configuration, and {@code DELETE} is what is withheld there, because
+     * a code named by a {@code propagation_gap} row cannot be removed without orphaning evidence.
      */
     private static final List<String> APPEND_ONLY_TABLES = List.of(
             // V2 - the V1-era tables, guarded by trigger functions as well as by the revoke.

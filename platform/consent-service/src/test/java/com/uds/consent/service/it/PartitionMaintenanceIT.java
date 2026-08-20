@@ -1,5 +1,6 @@
 package com.uds.consent.service.it;
 
+import com.uds.consent.ledger.store.PartitionStore;
 import com.uds.consent.service.sweeper.PartitionMaintenanceSweeper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -100,6 +102,85 @@ class PartitionMaintenanceIT extends PostgresIntegrationTest {
                 "update enforcement_decision set explanation = 'rewritten'"))
                 .rootCause()
                 .hasMessageMatching("(?s).*(permission denied|append-only).*");
+    }
+
+    @Test
+    @DisplayName("a partition can be provisioned by the role that will actually provision it")
+    void theSweeperWorksAsTheApplicationRole() {
+        // The assertion this suite existed for four phases without. PartitionStore issued
+        // `create table ... partition of` through the @Primary EntityScopedDataSource — the
+        // application role — and creating a partition requires OWNERSHIP of the parent, so the
+        // sweeper failed on every pass in any deployment whose two roles were genuinely separate.
+        // Every other test here connects as the owner, which is exactly why nobody saw it.
+        //
+        // PartitionStore is constructed here against an application-role connection rather than
+        // injected, because the injected one is wired to the owner and would pass whatever the
+        // code did. The FIRST draft of this test called uds_ensure_enforcement_partition directly
+        // and passed with PartitionStore reverted to raw DDL — asserting that the function works
+        // rather than that the platform uses it, which is the defect class this programme keeps
+        // finding. Going through the store is the whole point.
+        PartitionStore asApplication = new PartitionStore(new SingleConnectionDataSource(
+                POSTGRES.getJdbcUrl(), "uds_consent_app", "uds_consent_app", true));
+
+        // Far enough out that no other test in this suite has provisioned it.
+        LocalDate month = LocalDate.of(2031, 7, 1);
+        String partition = "enforcement_decision_2031_07";
+
+        assertThat(asApplication.ensureMonthlyPartition("enforcement_decision", month))
+                .withFailMessage("the application role could not provision a partition. If this is "
+                        + "a permission error, PartitionStore is issuing DDL directly again and "
+                        + "the sweeper is broken in every correctly-separated deployment")
+                .isTrue();
+
+        assertThat(jdbc.queryForObject(
+                "select count(*) from pg_class where relname = ?", Long.class, partition))
+                .isEqualTo(1L);
+
+        // Idempotent, because the sweeper runs nightly on every replica.
+        assertThat(asApplication.ensureMonthlyPartition("enforcement_decision", month)).isFalse();
+
+        // A second partitioned table needs a second function. Failing loudly here is how that gets
+        // noticed rather than silently creating nothing.
+        assertThatThrownBy(() -> asApplication.ensureMonthlyPartition("consent_event", month))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no partition-maintenance function is registered");
+    }
+
+    @Test
+    @DisplayName("no partition grants the application role update or delete")
+    void everyPartitionIsRevokedNotJustTheParent() {
+        // Derived from pg_inherits rather than listed, because the set grows by one a month and a
+        // hand-written list would be stale before the migration that wrote it shipped.
+        //
+        // V28 revoked update/delete/truncate on the PARENT and granted nothing on the children —
+        // because it did not need to. The provisioning scripts' `alter default privileges` grant
+        // all four on anything the owner creates, and PostgreSQL checks DML privileges on the
+        // relation NAMED IN THE QUERY. So `update enforcement_decision` was refused and
+        // `update enforcement_decision_2026_08` was permitted, and only the row trigger stopped
+        // the write. One of two layers, not none — and the reason two exist is that either can be
+        // got wrong.
+        List<String> writable = jdbc.queryForList("""
+                        select c.relname
+                          from pg_inherits i
+                          join pg_class c on c.oid = i.inhrelid
+                          join pg_class p on p.oid = i.inhparent
+                          join pg_namespace n on n.oid = p.relnamespace
+                         where p.relname = 'enforcement_decision'
+                           and n.nspname = 'public'
+                           and (has_table_privilege('uds_consent_app', c.oid, 'UPDATE')
+                             or has_table_privilege('uds_consent_app', c.oid, 'DELETE'))
+                         order by c.relname
+                        """, String.class);
+
+        assertThat(writable)
+                .withFailMessage("""
+                        the application role holds UPDATE or DELETE on these partitions of \
+                        enforcement_decision: %s.
+
+                        Only the row trigger is refusing the write. The revoke belongs in \
+                        uds_ensure_enforcement_partition (V34) so a partition arrives with it, \
+                        not in a list somebody maintains monthly.""", writable)
+                .isEmpty();
     }
 
     @Test

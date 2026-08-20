@@ -107,6 +107,91 @@ public class PropagationTargetStore {
                 .list();
     }
 
+    /**
+     * A target's coverage together with what actually happened on the wire.
+     *
+     * <p><strong>The read that answers "is this system current?" in one call.</strong> Until it
+     * existed the answer lived in two artefacts that nothing joined: a configuration error lands in
+     * {@code propagation_gap}, and a system that is simply <em>down</em> lands in
+     * {@code webhook_delivery} {@code FAILED} rows and the ten-attempt escalation instead — because
+     * a failing delivery throws, the message stays unpublished, the relay breaks, and the
+     * reconciler never runs for it at all.
+     *
+     * <p>So the register catches configuration and is blind to unavailability, which is the more
+     * common real-world non-delivery. An operator had to consult both and reconcile them by hand,
+     * with no document saying what to do when they disagreed. This returns both sides of the
+     * question against one system code.
+     */
+    public List<Health> healthFor(String entityId) {
+        return jdbc.sql("""
+                        select c.entity_id, c.topic, c.system_code, c.mandatory, c.active,
+                               c.description, c.subscription_id,
+                               d.last_status, d.last_attempt_at, d.consecutive_failures
+                          from (
+                            select t.entity_id, t.topic, t.system_code, t.mandatory, t.active,
+                                   t.description,
+                                   (select s.subscription_id
+                                      from webhook_subscription s
+                                     where s.entity_id = t.entity_id and s.topic = t.topic
+                                       and s.system_code = t.system_code and s.active
+                                     order by s.subscription_id limit 1) as subscription_id
+                              from propagation_target t
+                             where t.entity_id = :entityId
+                          ) c
+                          left join lateral (
+                            select w.status as last_status, w.delivered_at as last_attempt_at,
+                                   (select count(*) from webhook_delivery f
+                                     where f.subscription_id = c.subscription_id
+                                       and f.status = 'FAILED'
+                                       and f.delivered_at > coalesce((
+                                             select max(g.delivered_at) from webhook_delivery g
+                                              where g.subscription_id = c.subscription_id
+                                                and g.status = 'DELIVERED'), 'epoch'::timestamptz)
+                                   ) as consecutive_failures
+                              from webhook_delivery w
+                             where w.subscription_id = c.subscription_id
+                             order by w.delivered_at desc
+                             limit 1
+                          ) d on true
+                         order by c.topic, c.system_code
+                        """)
+                .param("entityId", entityId)
+                .query((rs, n) -> new Health(
+                        new Coverage(rs.getString("entity_id"), rs.getString("topic"),
+                                rs.getString("system_code"), rs.getBoolean("mandatory"),
+                                rs.getBoolean("active"), rs.getString("description"),
+                                rs.getString("subscription_id")),
+                        rs.getString("last_status"),
+                        rs.getTimestamp("last_attempt_at") == null
+                                ? null : rs.getTimestamp("last_attempt_at").toInstant(),
+                        rs.getInt("consecutive_failures")))
+                .list();
+    }
+
+    /**
+     * One target, its coverage, and the last thing that happened on the wire to it.
+     *
+     * @param lastStatus           {@code DELIVERED}, {@code FAILED}, or null where nothing has ever
+     *                             been attempted — which for a covered target means either no event
+     *                             has occurred yet or the configured publisher writes no delivery
+     *                             evidence at all
+     * @param consecutiveFailures  attempts since the last success. Non-zero with a covered target is
+     *                             the unavailability case the gap table cannot see
+     */
+    public record Health(Coverage coverage, String lastStatus, java.time.Instant lastAttemptAt,
+                         int consecutiveFailures) {
+
+        /**
+         * Whether this obligation is currently in doubt, for either of the two separate reasons.
+         *
+         * <p>Deliberately one flag over two causes, because an operator's question is "is this
+         * system current" and the causes are already named separately in the fields.
+         */
+        public boolean attention() {
+            return coverage.uncovered() || consecutiveFailures > 0;
+        }
+    }
+
     public void upsert(String entityId, String topic, String systemCode, boolean mandatory,
                        boolean active, String description) {
         jdbc.sql("""

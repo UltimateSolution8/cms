@@ -1,5 +1,6 @@
 package com.uds.consent.service.sweeper;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.uds.consent.ledger.store.EntityStore;
 import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.ProcessingActivityStore;
@@ -178,6 +179,7 @@ public class RetentionSweeper {
      * @param overdueActionIds named rather than counted, for the same reason the other sweeps name
      *                         theirs: the response is always "who is picking these up"
      */
+    @Schema(name = "RetentionReport")
     public record Report(Instant sweptAt, int raised, int noticesEmitted, int overdue,
                          List<Long> overdueActionIds) {
 

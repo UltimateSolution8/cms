@@ -1,5 +1,6 @@
 package com.uds.consent.service.sweeper;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.uds.consent.ledger.store.BreachStore;
 import com.uds.consent.service.config.PlatformProperties;
 import org.slf4j.Logger;
@@ -100,6 +101,7 @@ public class BreachSlaSweeper {
      * @param overdueObligations named rather than counted, because the response to this is always
      *                           "who is picking these up" and a count cannot be assigned to anyone
      */
+    @Schema(name = "BreachSlaReport")
     public record Report(Instant sweptAt, int overdue, int pending,
                          List<String> overdueObligations) {
 

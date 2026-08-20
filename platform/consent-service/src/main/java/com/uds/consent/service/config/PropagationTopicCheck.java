@@ -54,6 +54,8 @@ public class PropagationTopicCheck {
                 .filter(topic -> !published.contains(topic))
                 .toList();
 
+        reportUnobservableChannel();
+
         if (orphaned.isEmpty()) {
             return;
         }
@@ -69,5 +71,44 @@ public class PropagationTopicCheck {
                         register was populated, or the targets were registered against the wrong \
                         stream. Correct one of the two; do not leave it reading as satisfied.""",
                 orphaned.size(), orphaned, published);
+    }
+
+    /**
+     * Names the condition where targets are registered and the platform cannot evidence delivery.
+     *
+     * <p>{@code webhook_delivery} is written by the webhook publisher and by nothing else. The
+     * default is {@code log}, which is what the Denave pilot runs — so with mandatory targets
+     * registered, every gap row reads {@code NO_DELIVERY_CHANNEL}: honest, and not evidence of
+     * anything.
+     *
+     * <p><strong>The instruments look identical to full coverage.</strong>
+     * {@code uds.consent.propagation.uncovered} reads zero the moment a subscription exists,
+     * whether or not the configured publisher can ever observe a delivery through it, and nothing
+     * else says otherwise. A Board asking "prove the withdrawal reached DENCRM" would get "we
+     * published it, and we have no way to see whether anyone received it" — which is the right
+     * answer and is not the one the dashboard implies.
+     *
+     * <p>An empty register is deliberately <em>not</em> a finding. Nobody has claimed an obligation
+     * yet, so there is nothing the platform is failing to evidence.
+     */
+    private void reportUnobservableChannel() {
+        long registered = targets.distinctTopics().isEmpty() ? 0 : 1;
+        if (registered == 0) {
+            return;
+        }
+
+        // The BOUND value, not the property's presence. A check asserting that a publisher
+        // property exists would pass under every configuration, which is defect class 4 — the
+        // OTLP endpoint key is the precedent this project already paid for once.
+        String publisher = properties.getEvents().getPublisher();
+        if (publisher != null && publisher.toLowerCase(java.util.Locale.ROOT).contains("webhook")) {
+            return;
+        }
+
+        log.warn("""
+                        Propagation targets are registered and the configured publisher is '{}',                         which writes no delivery evidence.
+
+                        webhook_delivery is written by the webhook publisher alone. Under 'log'                         and 'kafka' the platform can say it published a consent change and cannot                         say that any system received it, so every gap row will read                         NO_DELIVERY_CHANNEL and the uncovered gauge will read zero — a set of                         instruments indistinguishable from full coverage. Set                         uds.consent.events.publisher to include 'webhook' before treating the                         register as evidence. REGULATORY_HANDOFF.md 8.7.""",
+                publisher);
     }
 }

@@ -5,6 +5,7 @@ import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.PropagationCoverageStore;
 import com.uds.consent.ledger.store.PropagationGapStore;
 import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.service.events.OutboxRelay;
 import org.junit.jupiter.api.AfterEach;
@@ -53,6 +54,9 @@ class PropagationIT extends PostgresIntegrationTest {
 
     private static final String ENTITY = "DENAVE_IN";
     private static final String TOPIC = "uds.consent.events";
+
+    @Autowired
+    private PropagationSystemStore propagationSystems;
 
     @Autowired
     private PropagationTargetStore targets;
@@ -154,7 +158,10 @@ class PropagationIT extends PostgresIntegrationTest {
         String neverRegistered = uniqueSystem();
         String deactivated = uniqueSystem();
 
+        declare(registered);
+
         targets.upsert(ENTITY, TOPIC, registered, true, true, "the control");
+        declare(deactivated);
         targets.upsert(ENTITY, TOPIC, deactivated, true, false, "registered, then switched off");
 
         subscribe();
@@ -190,12 +197,15 @@ class PropagationIT extends PostgresIntegrationTest {
         // Current state is derived from the register instead, so fixing the configuration fixes the
         // number. That reachability is the whole point of splitting state from evidence.
         String system = uniqueSystem();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "reachability fixture");
 
         assertThat(coverage.uncovered(ENTITY))
                 .withFailMessage("a mandatory target with no subscription did not read as uncovered")
                 .extracting(PropagationCoverageStore.Uncovered::systemCode)
                 .contains(system);
+
+        declare(system.toUpperCase(java.util.Locale.ROOT));
 
         webhooks.upsert(system, ENTITY, TOPIC, hookUrl(), "secret-" + system, true, "now reachable");
 
@@ -210,6 +220,7 @@ class PropagationIT extends PostgresIntegrationTest {
     @DisplayName("a system nobody registered is recorded as NO_SUBSCRIPTION, against the subject")
     void anUnregisteredSystemIsRecorded() {
         String system = uniqueSystem();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "unregistered fixture");
         subscribe();
 
@@ -255,7 +266,9 @@ class PropagationIT extends PostgresIntegrationTest {
         // satisfied by a failure — the platform would report a system told when it was unreachable.
         String system = uniqueSystem();
         String subscriptionId = system;
+        declare(subscriptionId.toUpperCase(java.util.Locale.ROOT));
         webhooks.upsert(subscriptionId, ENTITY, TOPIC, hookUrl(), "secret", true, "failing endpoint");
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "failure fixture");
 
         status.set(503);
@@ -291,6 +304,7 @@ class PropagationIT extends PostgresIntegrationTest {
         // and it is not idempotency; the limit is now stated on the column instead of hidden in a
         // green test. See theDailyGrainKeepsOnlyTheFirstMessageOfADay below.
         String system = uniqueSystem();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "idempotency fixture");
         subscribe();
 
@@ -317,8 +331,10 @@ class PropagationIT extends PostgresIntegrationTest {
         // that never consults webhook_delivery at all, which is precisely how D3 could have shipped
         // broken.
         String system = uniqueSystem();
+        declare(system.toUpperCase(java.util.Locale.ROOT));
         webhooks.upsert(system, ENTITY, TOPIC, hookUrl(), "secret-" + system, true,
                 "matched, but with no successful delivery for this message");
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "not-delivered fixture");
 
         reconciler.reconcile(TOPIC, ENTITY + "|nd-subject-" + UUID.randomUUID(), "{}", 999_000_002L);
@@ -345,6 +361,7 @@ class PropagationIT extends PostgresIntegrationTest {
         // it. If this test starts failing, that trade has been re-made and REGULATORY_HANDOFF §8.7
         // and the bundle's javadoc both need revisiting.
         String system = uniqueSystem();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "grain fixture");
         subscribe();
 
@@ -361,6 +378,7 @@ class PropagationIT extends PostgresIntegrationTest {
     @DisplayName("another entity's gaps are invisible")
     void gapsAreScopedToTheirEntity() {
         String system = uniqueSystem();
+        declare(system);
         targets.upsert(ENTITY, TOPIC, system, true, true, "isolation fixture");
         subscribe();
         drain(enqueue(ENTITY, withdrawal()));
@@ -413,6 +431,7 @@ class PropagationIT extends PostgresIntegrationTest {
 
     /** One always-reachable subscription, so the relay has somewhere to publish. */
     private void subscribe() {
+        declare("hook-propagation-it".toUpperCase(java.util.Locale.ROOT));
         webhooks.upsert("hook-propagation-it", ENTITY, TOPIC, hookUrl(), "propagation-it-secret",
                 true, "propagation suite receiver");
     }
@@ -464,5 +483,17 @@ class PropagationIT extends PostgresIntegrationTest {
         }
         throw new AssertionError("outbox message " + outboxId + " could not be drained in 25 passes; "
                 + "the relay is breaking on an earlier message that never succeeds");
+    }
+
+    /**
+     * Declares a system code before it is used on either side of the propagation join.
+     *
+     * <p>{@code V33} put a foreign key on {@code propagation_system} from both
+     * {@code propagation_target} and {@code webhook_subscription}, so a code the entity has not
+     * declared is refused by the database rather than silently producing a daily gap row for a
+     * system that may be perfectly reachable. Fixtures declare theirs the way an operator would.
+     */
+    private void declare(String systemCode) {
+        propagationSystems.upsert(ENTITY, systemCode, "test fixture", true);
     }
 }

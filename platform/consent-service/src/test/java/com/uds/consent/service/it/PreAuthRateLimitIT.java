@@ -134,9 +134,19 @@ class PreAuthRateLimitIT extends PostgresIntegrationTest {
     void probesSurviveTheFlood() {
         // A limiter that refused a readiness probe during an attack would drain a healthy instance
         // out of the load balancer at the moment the fleet most needs it — turning a defence
-        // against overload into an amplifier of one. Two independent defences produce this, and
-        // both are worth keeping: the filter's own /actuator exemption for a single-port
-        // deployment, and the management port not being the port the limiter defends.
+        // against overload into an amplifier of one.
+        //
+        // THIS TEST PROVES ONE OF THE TWO DEFENCES, AND NOT THE ONE ITS NAME SUGGESTS. It floods
+        // the traffic port and probes the MANAGEMENT port, where actuator endpoints live in a
+        // child context that never registers the parent's @Component filters — so
+        // PreAuthRateLimitFilter.shouldNotFilter is not on this path at all, and this test passes
+        // unchanged with the /actuator exemption deleted. What it establishes is that the
+        // management port is not the port the limiter defends, which is worth keeping and is a
+        // narrower statement.
+        //
+        // The exemption itself is proven by SinglePortProbeIT, on a single-port configuration —
+        // the deployment the exemption exists for. Carried as F9 from Phase 16 to Phase 20, named
+        // as "recorded" in three delivery records before it actually was.
         TestRestTemplate flooder = rest.withBasicAuth("compliance-console", "not-the-password");
         for (int i = 0; i < 20; i++) {
             flooder.getForEntity("/v1/admin/purposes", String.class);

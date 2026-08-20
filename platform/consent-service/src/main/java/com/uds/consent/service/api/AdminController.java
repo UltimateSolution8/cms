@@ -5,6 +5,7 @@ import com.uds.consent.core.model.ConsentEvent;
 import com.uds.consent.core.model.PurposeDefinition;
 import com.uds.consent.ledger.service.BlastRadiusService;
 import com.uds.consent.ledger.service.LedgerIntegrityVerifier;
+import com.uds.consent.ledger.service.ProjectionReconciler;
 import com.uds.consent.ledger.store.AdminAuditStore;
 import com.uds.consent.ledger.store.AlgorithmicSystemStore;
 import com.uds.consent.ledger.store.ApplicationRegistryStore;
@@ -19,9 +20,11 @@ import com.uds.consent.ledger.store.RetentionStore;
 import com.uds.consent.ledger.store.PropagationTargetStore;
 import com.uds.consent.ledger.store.PropagationCoverageStore;
 import com.uds.consent.ledger.store.PropagationGapStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.RightsFulfilmentStore;
 import com.uds.consent.ledger.store.SdfObligationStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
+import com.uds.consent.ledger.store.SweepRunStore;
 import com.uds.consent.ledger.store.SubjectStore;
 import com.uds.consent.ledger.store.VendorStore;
 import com.uds.consent.ledger.store.WebhookStore;
@@ -38,6 +41,7 @@ import com.uds.consent.service.adapter.CachingPurposeCatalog;
 import com.uds.consent.service.config.FeatureDisabledException;
 import com.uds.consent.service.config.PlatformProperties;
 import com.uds.consent.service.sweeper.IntegritySweeper;
+import com.uds.consent.service.sweeper.ProjectionReconciliationSweeper;
 import com.uds.consent.service.sweeper.ReconfirmationSweeper;
 import com.uds.consent.service.sweeper.RetentionSweeper;
 import jakarta.validation.Valid;
@@ -58,6 +62,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -105,6 +110,9 @@ public class AdminController {
     private final PropagationTargetStore propagationTargets;
     private final PropagationCoverageStore propagationCoverage;
     private final PropagationGapStore propagationGaps;
+    private final PropagationSystemStore propagationSystems;
+    private final ProjectionReconciliationSweeper projectionSweeper;
+    private final SweepRunStore sweepRuns;
 
     public AdminController(CachingPurposeCatalog purposes, EntityStore entities,
                            BlastRadiusService blastRadius, LedgerIntegrityVerifier verifier,
@@ -132,10 +140,16 @@ public class AdminController {
                            WebhookStore webhooks,
                            PropagationTargetStore propagationTargets,
                            PropagationCoverageStore propagationCoverage,
-                           PropagationGapStore propagationGaps) {
+                           PropagationGapStore propagationGaps,
+                           PropagationSystemStore propagationSystems,
+                           ProjectionReconciliationSweeper projectionSweeper,
+                           SweepRunStore sweepRuns) {
         this.propagationTargets = propagationTargets;
         this.propagationCoverage = propagationCoverage;
         this.propagationGaps = propagationGaps;
+        this.propagationSystems = propagationSystems;
+        this.projectionSweeper = projectionSweeper;
+        this.sweepRuns = sweepRuns;
         this.properties = properties;
         this.subjectStore = subjectStore;
         this.signingKeys = signingKeys;
@@ -450,6 +464,15 @@ public class AdminController {
         return Map.of(
                 "entityId", entityId,
                 "targets", coverage,
+                // Coverage AND what happened on the wire, in one read. The two failure modes land
+                // in different artefacts — a configuration error in propagation_gap, a system that
+                // is merely down in webhook_delivery's FAILED rows, because a failing delivery
+                // leaves the message unpublished and the reconciler never runs for it. An operator
+                // asking "is DENCRM current?" had to consult both and reconcile them by hand.
+                "health", propagationTargets.healthFor(entityId),
+                "needsAttention", propagationTargets.healthFor(entityId).stream()
+                        .filter(PropagationTargetStore.Health::attention)
+                        .map(h -> h.coverage().systemCode()).toList(),
                 // Named separately rather than left to the reader to filter. "How many obligations
                 // can this entity not currently meet" is the number an operator is here for.
                 "uncovered", coverage.stream().filter(PropagationTargetStore.Coverage::uncovered)
@@ -483,6 +506,8 @@ public class AdminController {
         }
 
         String systemCode = request.systemCode().toUpperCase(java.util.Locale.ROOT);
+        requireKnownSystem(request.entityId(), systemCode);
+
         propagationTargets.upsert(request.entityId(), topic, systemCode, request.mandatory(),
                 request.active(), request.description());
 
@@ -551,6 +576,68 @@ public class AdminController {
     }
 
     /**
+     * The system codes this entity recognises for propagation.
+     *
+     * <p>The register's vocabulary. Both {@code propagation_target} and
+     * {@code webhook_subscription} reference it, so a code that is not here cannot be used on
+     * either side — which is what stops a typo producing a daily gap row, permanently, in an
+     * append-only table, for a system that is in fact reachable.
+     */
+    @GetMapping("/propagation/systems")
+    public List<PropagationSystemStore.System> propagationSystems(@RequestParam String entityId) {
+        return propagationSystems.forEntity(entityId);
+    }
+
+    /**
+     * Declares or retires a system code.
+     *
+     * <p>Retiring is {@code active = false} and never a delete: a {@code propagation_gap} row
+     * naming a decommissioned system has to stay readable, because "this system was not told, on
+     * these days" is the entire content of that table.
+     */
+    @PutMapping("/propagation/systems")
+    public Map<String, Object> upsertPropagationSystem(
+            @Valid @RequestBody PropagationSystemRequest request, Authentication authentication) {
+        String actor = actorOf(authentication);
+        String systemCode = request.systemCode().toUpperCase(java.util.Locale.ROOT);
+
+        propagationSystems.upsert(request.entityId(), systemCode, request.description(),
+                request.active());
+
+        auditStore.record(actor, "PROPAGATION_SYSTEM_CONFIGURED", request.entityId(),
+                "propagation_system", systemCode,
+                Map.of("active", String.valueOf(request.active())));
+        return Map.of("systemCode", systemCode, "recorded", true);
+    }
+
+    /** @param active false retires a code without removing it; see the route javadoc */
+    public record PropagationSystemRequest(@NotBlank String entityId,
+                                           @NotBlank String systemCode,
+                                           String description,
+                                           boolean active) {
+    }
+
+    /**
+     * Refuses a system code this entity has not declared, naming what it has.
+     *
+     * <p>Loud and closed, at the moment the operator types it — the posture
+     * {@code fulfilment_target} already takes and the one propagation lacked. The alternative,
+     * which is what shipped in V31, is that a mistyped code is accepted, never joins, and is
+     * reported as an unmet obligation every day thereafter in a table nothing can edit.
+     */
+    private void requireKnownSystem(String entityId, String systemCode) {
+        if (!propagationSystems.isKnown(entityId, systemCode)) {
+            throw new IllegalArgumentException("unknown system code: " + systemCode
+                    + "; " + entityId + " recognises "
+                    + propagationSystems.forEntity(entityId).stream()
+                            .map(PropagationSystemStore.System::systemCode).toList()
+                    + ". Declare it at PUT /v1/admin/propagation/systems first — a code the "
+                    + "register cannot resolve produces a daily gap row for a system that may be "
+                    + "perfectly reachable, and propagation_gap is append-only.");
+        }
+    }
+
+    /**
      * Where this entity's consent changes are pushed.
      *
      * <p>The secret is returned as configured. That is deliberate and it is the reason this route
@@ -579,8 +666,14 @@ public class AdminController {
     public Map<String, Object> upsertSubscription(@Valid @RequestBody SubscriptionRequest request,
                                                   Authentication authentication) {
         String actor = actorOf(authentication);
+        String systemCode = request.systemCode() == null || request.systemCode().isBlank()
+                ? request.subscriptionId().toUpperCase(java.util.Locale.ROOT)
+                : request.systemCode().toUpperCase(java.util.Locale.ROOT);
+        requireKnownSystem(request.entityId(), systemCode);
+
         webhooks.upsert(request.subscriptionId(), request.entityId(), request.topic(),
-                request.url(), request.secret(), request.active(), request.description());
+                request.url(), request.secret(), request.active(), request.description(),
+                systemCode);
 
         // The secret is deliberately absent from the audit detail. An append-only table is exactly
         // where a shared secret should not end up, because it cannot afterwards be removed.
@@ -608,7 +701,16 @@ public class AdminController {
                                       @NotBlank String url,
                                       @NotBlank String secret,
                                       boolean active,
-                                      String description) {
+                                      String description,
+                                      /*
+                                       * Optional. Null keeps the historical behaviour of deriving
+                                       * the code from the subscription id — which is why it is not
+                                       * @NotBlank. It exists because an operator whose subscription
+                                       * is named DENCRM_PROD previously had no way at all to make
+                                       * it join a DENCRM propagation target except by deleting the
+                                       * subscription, which discards its delivery evidence.
+                                       */
+                                      String systemCode) {
     }
 
     /** The group's entity structure. */
@@ -837,6 +939,126 @@ public class AdminController {
     @GetMapping("/integrity/last")
     public IntegritySweeper.Report lastIntegrityReport() {
         return integritySweeper.lastReport();
+    }
+
+    /**
+     * Re-derives every artefact from its chain and reports what disagrees.
+     *
+     * <p>The integrity sweep proves the ledger; this proves the projection every decision is taken
+     * against. They are separate calls because they answer separate questions and because a broken
+     * chain makes this one's answer meaningless — run {@code /integrity/sweep} first if both are
+     * red.
+     *
+     * <p><strong>It reports and does not repair.</strong> A projector defect and a direct edit of
+     * {@code consent_artefact} produce an identical divergence, and only one of them is a security
+     * incident; re-projecting automatically would erase the distinction before anybody saw it.
+     * {@code docs/OPERATIONS.md} §3 carries what to do with a finding.
+     *
+     * <p><strong>Counts only.</strong> The sweep is group-wide by necessity; the answer must not
+     * be. Subject identifiers are on {@code /projection/divergences}, which carries an entity.
+     */
+    @PostMapping("/projection/sweep")
+    public ProjectionReconciliationSweeper.Report sweepProjection() {
+        return projectionSweeper.run();
+    }
+
+    /** The most recent projection reconciliation, as counts. */
+    @GetMapping("/projection/last")
+    public ProjectionReconciliationSweeper.Report lastProjectionReport() {
+        return projectionSweeper.lastReport();
+    }
+
+    /**
+     * The divergences the last sweep found for one entity.
+     *
+     * <p>Scoped by the {@code entityId} query parameter, which
+     * {@code EntityAccessGuard.requestedEntity} reads on <em>any</em> path — so this route needs no
+     * {@code ENTITY_PATH_PREFIXES} entry, and adding one that matched nothing would teach the next
+     * reader the wrong rule. A caller scoped to one fiduciary cannot read another's.
+     *
+     * <p>Paged, and it says when it is not complete: the page cap and, separately, the cap on what
+     * the <em>sweep</em> retained. The second matters because a systemic projector defect produces
+     * one divergence per artefact, and the honest answer is the exact count on
+     * {@code /projection/last} beside a bounded sample here.
+     */
+    @GetMapping("/projection/divergences")
+    public EntityDivergences projectionDivergences(
+            @RequestParam String entityId,
+            @RequestParam(defaultValue = "0") int offset) {
+
+        int cap = properties.getSweeper().getProjectionDivergencePageSize();
+        List<ProjectionReconciler.Divergence> forEntity = projectionSweeper.retainedFor(entityId);
+
+        List<ProjectionReconciler.Divergence> window = forEntity.stream()
+                .skip(Math.max(offset, 0))
+                .limit(cap + 1L)
+                .toList();
+        boolean morePages = window.size() > cap;
+        List<ProjectionReconciler.Divergence> page =
+                morePages ? window.subList(0, cap) : window;
+
+        List<EvidenceBundleService.Truncation> truncation = new ArrayList<>();
+
+        // The sample lives in the memory of whichever replica swept, and SweepLock means that is
+        // one of three. A replica that has not swept holds nothing, and an empty list is otherwise
+        // indistinguishable from "this entity is clean" — a well-formed 200 making a complete
+        // statement that is empty for a reason it did not disclose, which is the exact failure the
+        // evidence bundle's truncation notice exists to prevent.
+        if (projectionSweeper.lastReport().finishedAt() == null) {
+            truncation.add(new EvidenceBundleService.Truncation("sweep", 0, 0,
+                    "POST /v1/admin/projection/sweep — this instance has not swept, so it holds no "
+                            + "sample. The nightly sweep runs on one replica and keeps the result "
+                            + "in memory; an empty list here is not a statement that this entity "
+                            + "is clean. GET /v1/admin/projection/last carries the counts."));
+        }
+        if (morePages) {
+            truncation.add(new EvidenceBundleService.Truncation("divergences", page.size(), cap,
+                    "GET /v1/admin/projection/divergences?entityId=" + entityId
+                            + "&offset=" + (Math.max(offset, 0) + cap)));
+        }
+        if (projectionSweeper.retentionTruncated()) {
+            // The remainder genuinely cannot be paged to: the sweep discarded it rather than
+            // holding it. So the request named is the one that WOULD return more — re-run the
+            // sweep with a larger cap — rather than a page pointer that could never resolve.
+            // rules §9: a pointer is only honest if the route can deliver it.
+            truncation.add(new EvidenceBundleService.Truncation("retained", forEntity.size(),
+                    projectionSweeper.lastReport().retentionCap(),
+                    "POST /v1/admin/projection/sweep with uds.consent.sweeper."
+                            + "projection-divergence-cap raised above "
+                            + projectionSweeper.lastReport().retentionCap()
+                            + "; the exact total is GET /v1/admin/projection/last"));
+        }
+        return new EntityDivergences(entityId, projectionSweeper.lastReport().finishedAt(),
+                Math.max(offset, 0), page.size(), page, truncation);
+    }
+
+    /**
+     * One entity's divergences, and what this answer leaves out.
+     *
+     * @param sweptAt    when the instance answering last swept, or <strong>null</strong> if it
+     *                   never has. Load-bearing rather than informational: the sample is per
+     *                   instance and the sweep runs on one replica, so without this a reader
+     *                   cannot tell a clean entity from a replica that was not asked to look
+     * @param truncation empty when the answer is complete, which is the common case
+     */
+    public record EntityDivergences(String entityId, java.time.Instant sweptAt, int offset,
+                                    int returned,
+                                    List<ProjectionReconciler.Divergence> divergences,
+                                    List<EvidenceBundleService.Truncation> truncation) {
+    }
+
+
+    /**
+     * When each scheduled sweep last ran, and where.
+     *
+     * <p>The answer to "has anything quietly stopped". A silently dead {@code ExpirySweeper} writes
+     * no {@code EXPIRED} events and the evidence plane goes incomplete while every decision stays
+     * correct — no error, no failed request, only a growing absence. Until {@code sweep_run}
+     * existed nothing recorded that any sweep had run at all.
+     */
+    @GetMapping("/sweeps")
+    public List<SweepRunStore.Run> sweepRuns() {
+        return sweepRuns.all();
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.uds.consent.service.sweeper;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.uds.consent.ledger.service.LedgerIntegrityVerifier;
 import com.uds.consent.service.config.PlatformProperties;
 import org.slf4j.Logger;
@@ -93,6 +94,7 @@ public class IntegritySweeper {
      * @param chainsWithFindings chains with any finding
      * @param chainsTampered  chains whose findings indicate alteration rather than schema drift
      */
+    @Schema(name = "LedgerIntegrityReport")
     public record Report(Instant startedAt, Instant finishedAt, int chainsChecked,
                          int chainsWithFindings, long chainsTampered) {
 

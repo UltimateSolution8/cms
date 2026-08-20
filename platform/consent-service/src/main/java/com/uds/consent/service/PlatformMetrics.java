@@ -4,12 +4,17 @@ import com.uds.consent.core.decision.DenialReason;
 import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.PartitionStore;
 import com.uds.consent.ledger.store.PropagationCoverageStore;
+import com.uds.consent.service.events.OutboxRelay;
 import com.uds.consent.service.events.PropagationReconciler;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
+import com.uds.consent.ledger.store.SweepRunStore;
 import com.uds.consent.policy.capture.CaptureViolation;
+import com.uds.consent.service.config.PlatformProperties;
+import com.uds.consent.service.sweeper.ProjectionReconciliationSweeper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.stereotype.Component;
@@ -17,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -43,6 +49,21 @@ import java.util.concurrent.ConcurrentHashMap;
 @DependsOnDatabaseInitialization
 public class PlatformMetrics {
 
+    /**
+     * The sweeps whose staleness is watched, by the name each passes to {@code SweepLock}.
+     *
+     * <p>Listed rather than derived, and the reason is the point of the gauge. A derived list reads
+     * {@code sweep_run}, which only holds a row once a sweep has <em>run</em> — so a job that has
+     * never started would simply be absent from the list and nothing would notice, which is the
+     * exact condition being watched. A hand-written list makes a job that never ran visible as a
+     * gauge with no value. A sweeper added without a line here is the thing to look for when this
+     * list and {@code docs/OPERATIONS.md} §4's table disagree.
+     */
+    private static final List<String> TRACKED_SWEEPS = List.of(
+            "expiry", "retention", "integrity", "rights-sla", "breach-sla",
+            "partition-maintenance", "reconfirmation",
+            ProjectionReconciliationSweeper.SWEEP_NAME, OutboxRelay.SWEEP_NAME);
+
     private final MeterRegistry registry;
     private final Timer decisionTimer;
     private final Timer captureTimer;
@@ -56,7 +77,10 @@ public class PlatformMetrics {
                            RightsRequestStore rights, EnforcementRecorder recorder,
                            PartitionStore partitions, SigningKeyStore keys,
                            PropagationCoverageStore propagation,
-                           PropagationReconciler reconciler) {
+                           PropagationReconciler reconciler,
+                           SweepRunStore sweeps,
+                           ProjectionReconciliationSweeper projections,
+                           PlatformProperties properties) {
         this.registry = registry;
 
         this.decisionTimer = Timer.builder("uds.consent.decision")
@@ -106,11 +130,48 @@ public class PlatformMetrics {
         registry.gauge("uds.consent.propagation.uncovered", propagation,
                 PropagationCoverageStore::uncoveredCount);
 
+        // Mandatory targets the configured publisher can never evidence delivery for. Zero on an
+        // empty register and zero under 'webhook'; above zero means the register reads covered
+        // while the platform has no way to see that anybody received anything — instruments
+        // indistinguishable from full coverage, which is the condition the start-up WARN names
+        // once at boot and nothing kept saying.
+        registry.gauge("uds.consent.propagation.unobservable_targets", propagation,
+                store -> store.unobservableTargets(
+                        properties.getEvents().getPublisher() != null
+                                && properties.getEvents().getPublisher()
+                                        .toLowerCase(java.util.Locale.ROOT).contains("webhook")));
+
         // Evidence about propagation that the platform could not write. Same shape and same reason
         // as enforcement.failed_writes: above zero means consent changes are going out and what
         // could not be shown to have arrived is not being recorded.
         registry.gauge("uds.consent.propagation.failed_writes", reconciler,
                 PropagationReconciler::failedWrites);
+
+        // Artefacts that do not agree with the chain that produced them. Zero on a healthy
+        // database and reachable, because re-projecting a divergent artefact fixes the number —
+        // which is what makes it alertable at all.
+        registry.gauge("uds.consent.projection.divergent", projections,
+                sweeper -> (double) sweeper.lastReport().divergent());
+
+        // How long since each sweep last FINISHED, tagged by sweep name.
+        //
+        // Read out of sweep_run rather than out of memory, and that is the whole design. SweepLock
+        // runs a sweep on one instance at a time, so an in-memory timestamp reads "never ran" on
+        // every replica that skipped — permanently — and an alert over the maximum would fire
+        // forever and be silenced within a week.
+        //
+        // A sweep with no row is NOT reported as zero. Zero seconds means "finished just now",
+        // which is indistinguishable from healthy, and a job that has never run is the exact
+        // condition this gauge exists to surface. It is reported as NaN, which Prometheus renders
+        // as absent — and `absent()` is what the alert rule keys on.
+        for (String sweep : TRACKED_SWEEPS) {
+            registry.gauge("uds.consent.sweep.last_run_age_seconds",
+                    List.of(Tag.of("sweep", sweep)), sweeps,
+                    store -> store.find(sweep)
+                            .map(run -> run.ageSeconds(Instant.now()))
+                            .map(Long::doubleValue)
+                            .orElse(Double.NaN));
+        }
 
         // Open rights requests whose clock started on an instant nobody verified. V30 built the
         // index for this question and nothing ever asked it.

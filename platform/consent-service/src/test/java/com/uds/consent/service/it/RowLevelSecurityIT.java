@@ -106,7 +106,16 @@ class RowLevelSecurityIT extends PostgresIntegrationTest {
             // it is behind. Both are written here as well as being derivable, because the two
             // assertions have opposite shapes and only this one fails when a table is forgotten
             // in the migration rather than in the list.
-            "propagation_target", "propagation_gap");
+            "propagation_target", "propagation_gap",
+            // V33. The vocabulary an entity declares for propagation. Entity-scoped like the two
+            // above, so it belongs in both halves of this suite — the derived assertion picks it
+            // out of information_schema on its own, and this list is what fails when a future
+            // entity-scoped table is added without a policy at all.
+            //
+            // sweep_run (V32) is deliberately NOT here and has no entity_id: a sweep is a platform
+            // job, not a fiduciary's record, so there is nothing to isolate. A reader comparing
+            // this list against \dt needs to find that written down rather than infer an omission.
+            "propagation_system");
 
     /**
      * The tables that carry an {@code entity_id} and are open on purpose.

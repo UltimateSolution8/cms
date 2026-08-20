@@ -30,6 +30,8 @@
   </modules>
 
   <properties>
+    <!-- Suites excluded from `mvn verify`. See the failsafe plugin's comment below. -->
+    <failsafe.excluded.groups>keycloak</failsafe.excluded.groups>
     <java.version>21</java.version>
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -92,6 +94,19 @@
         <artifactId>maven-failsafe-plugin</artifactId>
         <configuration>
           <groups>integration</groups>
+          <!-- KeycloakIssuerIT carries this tag and not `integration`… except that JUnit 5
+               inherits class-level tags from a superclass, and it extends
+               PostgresIntegrationTest for the database. So the tag alone would not exclude it
+               and it is excluded here instead. It pulls a ~450 MB image and starts a JVM inside
+               it to test an identity provider rather than this platform; JwtAuthenticationIT's
+               javadoc already refused that trade for every build. Run it deliberately:
+
+                 mvn -B verify -pl consent-service -am -Dit.test=KeycloakIssuerIT \
+                     -Dfailsafe.excluded.groups=
+
+               It therefore contributes nothing to .claude/state/test-baseline, which is the
+               honest reading and not an oversight. -->
+          <excludedGroups>${failsafe.excluded.groups}</excludedGroups>
         </configuration>
         <executions>
           <execution>

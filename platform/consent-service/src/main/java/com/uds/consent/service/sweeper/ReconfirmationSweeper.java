@@ -1,5 +1,6 @@
 package com.uds.consent.service.sweeper;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.uds.consent.core.model.Jurisdiction;
 import com.uds.consent.core.model.LegalBasis;
 import com.uds.consent.core.model.PurposeDefinition;
@@ -141,6 +142,7 @@ public class ReconfirmationSweeper {
         return lastReport;
     }
 
+    @Schema(name = "ReconfirmationReport")
     public record Report(Instant sweptAt, int raised, int overdue, List<Long> overdueIds) {
 
         public boolean clean() {

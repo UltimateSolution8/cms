@@ -191,6 +191,19 @@ uds:
       integrity-enabled: true
       integrity-page-size: 200
       integrity-cron: "0 15 2 * * *"
+      # Verifies the PROJECTION against the chain. The integrity sweep proves consent_event;
+      # nothing proved consent_artefact, which is the row every decision is actually taken
+      # against. Runs after the integrity sweep, deliberately: if the chain itself is broken,
+      # "the projection disagrees with the chain" is the second finding, not the first.
+      projection-reconciliation-enabled: true
+      projection-reconciliation-page-size: 200
+      projection-reconciliation-report-limit: 20
+      # The cap is on what the sweep RETAINS for the entity-scoped admin route, never on what it
+      # counts. A systemic projector defect produces one divergence per artefact; the count stays
+      # exact because a capped count would make exactly that case look smaller than it is.
+      projection-divergence-cap: 500
+      projection-divergence-page-size: 100
+      projection-reconciliation-cron: "0 15 3 * * *"
       # Statutory deadlines on rights requests. Breaches log at ERROR every pass until the
       # request is closed; wire that level to the on-call channel, or the sweep is something
       # that ran rather than something anyone read.
@@ -289,6 +302,10 @@ uds:
       #   entity_id  — the fiduciary this token may act for. ABSENT MEANS GROUP LEVEL, the same
       #                grant an unscoped client credential has. An issuer that omits it for a
       #                scoped integration hands that integration every entity in the group.
+      #                Where the issuer cannot mint a custom claim at all — Entra will not, for a
+      #                custom API, without a claims-mapping policy and a custom signing key — an
+      #                app role named entity.<ID> carries the same fact and needs neither. Two of
+      #                them on one token is refused rather than resolved by iteration order.
       #   preferred_username — the human, written to admin_audit_event.actor_id. Under a token
       #                X-UDS-Actor is ignored entirely; see Actor.
       jwt:
@@ -297,14 +314,26 @@ uds:
         # Unset accepts any token the issuer signed — usually wrong where one provider fronts
         # several services, since a token minted for another of them would authenticate here.
         audience: ${OIDC_AUDIENCE:}
-        roles-claim: scope
+        # Every one of these is read and the results are unioned. NOT first-non-empty: an Entra
+        # delegated token carries scp: "openid profile" (nothing this platform maps) beside
+        # roles: ["consent.admin"] (which it does), and taking the first would refuse a valid
+        # grant while naming the wrong claim in the diagnostic. A union cannot over-grant — the
+        # lookup below is an allowlist.
+        roles-claims: [scope, scp, roles]
         entity-claim: entity_id
+        entity-role-prefix: "entity."
         scope-roles:
           consent.decision: DECISION
           consent.capture: CAPTURE
           consent.admin: ADMIN
           consent.relay: CONSENT_MANAGER
       basic-enabled: ${BASIC_AUTH_ENABLED:true}
+      cors:
+        # Empty means off, and off is what every machine caller needs — none of them is subject to
+        # a preflight. Set this only for the browser applications that actually exist, by exact
+        # origin. Never "*": the list is the record of which browser clients there are.
+        allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+        max-age-seconds: 1800
       clients:
         # Development credentials only. Real deployments source these from the secret store,
         # and the destination is the group's OIDC provider rather than Basic auth at all.
@@ -390,3 +419,65 @@ uds:
 logging:
   level:
     com.uds.consent: DEBUG
+
+---
+# The hosted development environment: a managed PostgreSQL reached through a connection pooler.
+#
+# Written against the Supabase project provisioned in Phase 22, and every value in it exists
+# because a check disproved something that had been assumed. Read the comments before changing a
+# number; three of them describe a failure that is silent.
+spring:
+  config:
+    activate:
+      on-profile: hosted
+
+  datasource:
+    # SESSION-MODE POOLER, PORT 5432. Never 6543.
+    #
+    # 6543 is transaction mode, which returns a connection to the pool at the end of every
+    # transaction and hands it to somebody else. Two things in this platform are session state
+    # and would follow it there:
+    #
+    #   * EntityScopedDataSource sets uds.entity_id as a session GUC, so one fiduciary's claim
+    #     would scope another fiduciary's query — both isolation layers agreeing on the wrong
+    #     answer, which is the exact failure rules §2 exists to refuse.
+    #   * SweepLock holds a PostgreSQL session advisory lock, which is released when the session
+    #     ends and is meaningless when the session is not the unit of work.
+    #
+    # This WAS tested against 6543 during Phase 22 and the entity claim appeared to survive.
+    # That test proves nothing: with one client and one idle connection, the pooler never
+    # reassigns. Anyone repeating it will get the same reassuring answer for the same reason.
+    # CAPACITY.md §3 carries the argument.
+    #
+    # The direct host (db.<ref>.supabase.co) is IPv6-ONLY. It answers from a developer's laptop
+    # and will not answer from a default Docker bridge network or an IPv4-only cluster, where it
+    # presents as a connect timeout rather than as a name that does not resolve. The pooler
+    # hostname below is dual-stack, which is the second reason to use it.
+    url: ${DB_URL:jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres}
+    # On the pooler the username carries the project reference: <role>.<project-ref>.
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    hikari:
+      # max_connections on this project is 60, three of them superuser-reserved, and roughly a
+      # dozen already held by the provider's own processes — so the whole platform has about 45
+      # to work with, shared between the application pool and the migration pool below.
+      #
+      # 10 per instance leaves room for three replicas and the migration pool, with headroom for
+      # a rolling deploy where old and new pods overlap. deploy/k8s/deployment.yaml hardcodes 20,
+      # which is the laptop number: it is correct against a database the deployment owns and
+      # wrong against a shared managed one. CAPACITY.md §3 has the derivation, and the ceiling
+      # that actually binds is authentication, not the pool — §7.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+
+  flyway:
+    # The two roles are separate here exactly as they are locally, and it matters more: on a
+    # managed database the owner is the provider's superuser-adjacent role, which on Supabase
+    # holds BYPASSRLS. Nothing but Flyway may connect as it. deploy/hosted/provision.sql creates
+    # uds_consent_app and must be run BEFORE the first migration — eighteen migrations wrap their
+    # grants and RLS policies in a presence check for that role and SKIP THEM SILENTLY when it is
+    # absent, so a database migrated without it starts, serves traffic, and has neither the
+    # append-only revokes nor any of the ~30 policies. deploy/hosted/verify.sql is what proves
+    # otherwise; do not take a successful migration as evidence.
+    url: ${DB_MIGRATION_URL:${DB_URL:jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres}}
+    user: ${DB_MIGRATION_USER}
+    password: ${DB_MIGRATION_PASSWORD}

@@ -1,6 +1,7 @@
 package com.uds.consent.service.it;
 
 import com.uds.consent.ledger.store.AdminAuditStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.WebhookStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,9 @@ class PropagationAdminIT extends PostgresIntegrationTest {
     private static final String ENTITY = "DENAVE_IN";
     private static final String TOPIC = "uds.consent.events";
     private static final String TARGETS = "/v1/admin/propagation/targets";
+
+    @Autowired
+    private PropagationSystemStore propagationSystems;
 
     @Autowired
     private TestRestTemplate rest;
@@ -117,8 +121,10 @@ class PropagationAdminIT extends PostgresIntegrationTest {
             // in the world under a different label — which is the production failure exactly.
             // Distinct URLs: webhook_subscription is unique on (entity_id, topic, url), because
             // two subscriptions pointing at the same endpoint would double-deliver.
+            declare(matched.toUpperCase(java.util.Locale.ROOT));
             webhooks.upsert(matched, ENTITY, TOPIC, "http://127.0.0.1:1/" + matched, "s", true,
                     "matched");
+            declare(mismatched + "_PROD".toUpperCase(java.util.Locale.ROOT));
             webhooks.upsert(mismatched + "_PROD", ENTITY, TOPIC,
                     "http://127.0.0.1:1/" + mismatched, "s", true, "labelled differently");
 
@@ -218,8 +224,18 @@ class PropagationAdminIT extends PostgresIntegrationTest {
 
     // -------------------------------------------------------------------------------------------
 
+    /**
+     * Registers a target through the route, declaring its system code first.
+     *
+     * <p>The declaration is what an operator does before naming a system on either side of the
+     * join — {@code V33} refuses a code the entity has not declared, so that a typo is caught at
+     * the moment it is typed rather than reported as a daily unmet obligation, permanently, in an
+     * append-only table. {@code anUnknownSystemCodeIsRefused} covers the refusal itself; every
+     * other test here is about the target, so they declare and move on.
+     */
     private ResponseEntity<String> put(String systemCode, boolean mandatory, boolean active,
                                        String actor) {
+        declare(systemCode);
         return rest.withBasicAuth("compliance-console", "admin-secret")
                 .exchange(TARGETS, HttpMethod.PUT, new HttpEntity<>(Map.of(
                         "entityId", ENTITY,
@@ -265,5 +281,17 @@ class PropagationAdminIT extends PostgresIntegrationTest {
     /** A system code no other suite will register. */
     private static String uniqueSystem() {
         return "PADMIN_" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    /**
+     * Declares a system code before it is used on either side of the propagation join.
+     *
+     * <p>{@code V33} put a foreign key on {@code propagation_system} from both
+     * {@code propagation_target} and {@code webhook_subscription}, so a code the entity has not
+     * declared is refused by the database rather than silently producing a daily gap row for a
+     * system that may be perfectly reachable. Fixtures declare theirs the way an operator would.
+     */
+    private void declare(String systemCode) {
+        propagationSystems.upsert(ENTITY, systemCode, "test fixture", true);
     }
 }

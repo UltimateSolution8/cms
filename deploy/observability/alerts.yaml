@@ -116,11 +116,22 @@ spec:
             severity: critical
           annotations:
             summary: "{{ $value }} system(s) must be told about consent changes and cannot be reached"
+            # The gauge is group-wide and untagged, deliberately: a label per fiduciary would put
+            # entity cardinality on a series read on every scrape and every probe. So the alert
+            # cannot name WHICH entity, and the responder's first step would otherwise be fifteen
+            # per-entity calls. This closes that gap without the label: /actuator/health carries
+            # propagationUncovered, and the one route below answers "which" in a single call per
+            # entity that has any.
+            first_step: >-
+              curl -s localhost:9090/actuator/health
+                | jq '.components.platform.details.propagationUncoveredEntities';
+              then GET /v1/admin/propagation/targets?entityId=<entity> for each entity it names.
             description: >-
               A mandatory propagation_target has no active webhook_subscription carrying its
               system_code. Withdrawals are being recorded and are reaching nobody at that system.
               Check GET /v1/admin/propagation/targets — each row names the subscription resolved
-              against it, and a null there is either an unregistered system or a system_code typo.
+              against it, its last delivery outcome and its consecutive failure count, and a
+              null subscription there is either an unregistered system or a system_code typo.
             runbook: "docs/OPERATIONS.md#4-sweepers-and-the-outbox"
 
         - alert: PropagationEvidenceWriteFailing
@@ -171,6 +182,98 @@ spec:
             description: >-
               The partition sweeper provisions three months ahead. Under one month means it has not
               run for two. When the runway reaches zero, every denial fails to record.
+
+        - alert: PropagationUnobservable
+          # Targets are registered and the configured publisher writes no delivery evidence at all.
+          # webhook_delivery is written by the webhook publisher alone, so under 'log' — the
+          # shipped default, and what the pilot runs — the register can read fully covered while
+          # the platform has no way to see that anybody received anything. The uncovered gauge
+          # reads zero either way, which is the problem: the instruments are indistinguishable from
+          # full coverage.
+          #
+          # A start-up WARN says this once and is rotated out within the week. This keeps saying it.
+          expr: uds_consent_propagation_unobservable_targets > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $value }} mandatory propagation target(s) cannot be evidenced at all"
+            description: >-
+              Systems are registered as having to be told about consent changes, and
+              uds.consent.events.publisher does not include 'webhook'. Every propagation_gap row
+              will read NO_DELIVERY_CHANNEL — honest, and not evidence that anyone was told.
+              Set the publisher before treating the register as proof of propagation.
+            runbook: "docs/REGULATORY_HANDOFF.md"
+
+        - alert: ProjectionDivergesFromChain
+          # The row every decision is taken against no longer agrees with the events that produced
+          # it. Critical, and NOT auto-remediated: a projector defect and a direct UPDATE of
+          # consent_artefact produce an identical divergence, and one of them is a security
+          # incident. Re-projecting before establishing which erases the only evidence of the
+          # difference.
+          expr: uds_consent_projection_divergent > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} consent artefact(s) disagree with their chain"
+            description: >-
+              The projection reconciliation sweep found artefacts whose status, purpose version or
+              capture method do not match what the ledger implies. consent_artefact is what the
+              decision engine reads, what receipts render and what the evidence bundle reports, so
+              a divergence here is being acted on right now. Do NOT re-project before establishing
+              the cause. GET /v1/admin/projection/last carries the exact counts; the subjects are on
+              GET /v1/admin/projection/divergences?entityId=..., which is entity-scoped — the
+              summary deliberately names nobody, so the first step is one call per affected entity.
+            runbook: "docs/OPERATIONS.md#3-ledger-integrity"
+
+        - alert: SweepHasNotRun
+          # A silently dead sweeper produces no error, no failed request and no alert — only a
+          # growing absence. A dead ExpirySweeper writes no EXPIRED events and the evidence plane
+          # goes quietly incomplete while every decision stays correct, which is what makes it
+          # hard to spot.
+          #
+          # Six hours is chosen against the slowest tracked sweep: the integrity and projection
+          # sweeps are nightly, so anything under a day is normal for them, and the frequent jobs
+          # (expiry every 5m, relay every 2s) are hours stale long before this fires. One threshold
+          # over a tagged series rather than nine rules; tighten per sweep if a job earns it.
+          expr: uds_consent_sweep_last_run_age_seconds > 129600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the {{ $labels.sweep }} sweep has not finished in over 36 hours"
+            description: >-
+              Scheduled maintenance of the evidence plane has stopped for this job. Check
+              GET /v1/admin/sweeps for which replica last ran it and whether it failed rather than
+              never starting.
+            runbook: "docs/OPERATIONS.md#4-sweepers-and-the-outbox"
+
+        - alert: SweepHasNeverRun
+          # Separate from the rule above, and it has to be: a sweep that has never finished exports
+          # NaN, and `> 129600` is false for NaN, so the threshold rule cannot see it. "Never
+          # started" is a worse fault than "stopped", because nothing was ever proven to work.
+          #
+          # NOT absent(). The first version of this rule was `absent(uds_consent_sweep_last_run_age_seconds)`
+          # and could never have fired: absent() returns 1 only when the WHOLE selector is empty,
+          # and `expiry` runs every five minutes on any live deployment — so the selector always has
+          # series and the expression is permanently 0. A default deployment carries a permanently
+          # unrun sweep (Korea re-confirmation is off by default and returns before the lock), which
+          # is precisely the state this rule exists for, and nothing would have fired.
+          #
+          # Counting the series that carry a real value is what actually answers it. Nine sweeps are
+          # tracked; fewer than nine finite samples means at least one has never finished.
+          expr: count(uds_consent_sweep_last_run_age_seconds >= 0) < 9 or absent(uds_consent_sweep_last_run_age_seconds)
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "one or more sweeps have never run on this deployment"
+            description: >-
+              No sweep_run row exists for at least one tracked sweep an hour after start-up. Either
+              the schedule is disabled in configuration or the job has never reached its first
+              tick. GET /v1/admin/sweeps lists what has run.
+            runbook: "docs/OPERATIONS.md#4-sweepers-and-the-outbox"
 
     # -----------------------------------------------------------------------------------
     # Service level. The objectives OPERATIONS.md §6 publishes, watched rather than asserted.

@@ -66,6 +66,70 @@ public class ConsentArtefactStore {
                 .list();
     }
 
+    /**
+     * Artefacts with no event behind them at all.
+     *
+     * <p><strong>The forged grant.</strong> The reconciliation sweep walks chains and compares each
+     * to its artefact, which catches an artefact that was <em>edited</em> — and cannot see one that
+     * was <em>inserted</em>, because there is no chain to start from. That is the wrong way round:
+     * a fabricated {@code WITHDRAWN} refuses lawful processing, while a fabricated {@code GRANTED}
+     * authorises unlawful processing on a consent that never existed, and the same owner role can
+     * write either.
+     *
+     * <p>Anti-join rather than a per-subject query, because it answers a question about the whole
+     * table and runs once per sweep.
+     */
+    public List<String[]> findWithoutChain(int limit) {
+        return jdbc.sql("""
+                        select a.entity_id, a.subject_id, a.purpose_code, a.status
+                          from consent_artefact a
+                         where not exists (
+                               select 1 from consent_event e
+                                where e.entity_id = a.entity_id
+                                  and e.subject_id = a.subject_id
+                                  and e.purpose_code = a.purpose_code)
+                         order by a.entity_id, a.subject_id, a.purpose_code
+                         limit :limit
+                        """)
+                .param("limit", limit)
+                .query((rs, n) -> new String[]{rs.getString("entity_id"), rs.getString("subject_id"),
+                        rs.getString("purpose_code"), rs.getString("status")})
+                .list();
+    }
+
+    /**
+     * How many artefacts have no event behind them, counted rather than sampled.
+     *
+     * <p>{@link #findWithoutChain(int)} takes a limit, so the size of what it returns is the size of
+     * the <em>page</em> and not of the finding. Reporting that as the count understates exactly the
+     * case that matters most: a bulk insert into {@code consent_artefact} produces thousands of
+     * forged rows and a limited query would report the page size, every time, looking like a small
+     * and stable problem.
+     *
+     * <p><strong>{@code except} rather than {@code not exists}, and it is a measured 76× not a
+     * preference.</strong> Under RLS the {@code not exists} form degrades to a nested loop: the
+     * policy predicate calls {@code current_setting()}, which the planner cannot estimate, so it
+     * assumes 0.5% selectivity — 250 rows against 50,002 — and chooses a plan that is correct and
+     * quadratic. Measured as the application role on 50,002 artefacts: <strong>3,438 ms</strong>
+     * against 45 ms for the form below, with 24,974,751 rows discarded by the join filter, and
+     * unchanged by {@code ANALYZE} because the estimate is structural rather than stale.
+     * {@code HashSetOp Except} cannot nested-loop, so the shape is stable whatever the policy does
+     * to the estimate. The set operation is safe here because {@code (entity_id, subject_id,
+     * purpose_code)} is {@code consent_artefact}'s primary key, so the rows are already distinct.
+     * {@code CAPACITY.md} §8.
+     */
+    public long countWithoutChain() {
+        return jdbc.sql("""
+                        select count(*) from (
+                            select entity_id, subject_id, purpose_code from consent_artefact
+                            except
+                            select entity_id, subject_id, purpose_code from consent_event
+                        ) missing
+                        """)
+                .query(Long.class)
+                .single();
+    }
+
     /** Writes the projected state. Called only by the projector, inside the append transaction. */
     public void upsert(ConsentArtefact artefact, int conflictCount) {
         jdbc.sql("""

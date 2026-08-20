@@ -10,7 +10,6 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -55,7 +54,7 @@ public final class JwtRoleConverter implements Converter<Jwt, AbstractAuthentica
 
     @Override
     public AbstractAuthenticationToken convert(Jwt jwt) {
-        Set<String> scopes = scopes(jwt);
+        Set<String> scopes = grantedValues(jwt, config);
         List<GrantedAuthority> authorities = new ArrayList<>();
         for (String scope : scopes) {
             String role = config.getScopeRoles().get(scope);
@@ -67,40 +66,65 @@ public final class JwtRoleConverter implements Converter<Jwt, AbstractAuthentica
             }
         }
 
-        if (authorities.isEmpty() && !scopes.isEmpty()) {
-            log.debug("token for '{}' carries no scope this platform maps to a role; it will "
-                    + "authenticate and be refused authorisation. Scopes: {}", jwt.getSubject(),
-                    scopes);
+        // WARN, on authorities being empty rather than on scopes being non-empty, and the
+        // difference is the whole point. The previous guard required a non-empty scope set, so the
+        // one case worth catching — a claim name the provider does not use, which yields no values
+        // at all — logged NOTHING and presented as an unexplained 403. Naming both the claims that
+        // were inspected and the claims the token actually carries turns that into a five-second
+        // diagnosis. Not a flood vector: the token has already passed signature validation.
+        if (authorities.isEmpty()) {
+            log.warn("token for '{}' authenticates but maps to no role, so every route will refuse "
+                            + "it. Looked for granted values in {}; the token carries the claims "
+                            + "{}; values found: {}. Check uds.consent.security.jwt.roles-claims "
+                            + "and scope-roles — the lookup is exact and case-sensitive.",
+                    jwt.getSubject(), config.getRolesClaims(), jwt.getClaims().keySet(), scopes);
         }
         return new JwtAuthenticationToken(jwt, authorities, jwt.getSubject());
     }
 
     /**
-     * The granted scopes, from whichever shape the provider uses.
+     * Every granted value the token carries, unioned across the configured claims.
      *
-     * <p>Both are common and providers disagree: {@code scope} is conventionally a single
-     * space-delimited string, {@code roles} and {@code scp} are conventionally arrays, and several
-     * providers emit the opposite of what the convention says. Handling both here costs six lines
-     * and removes a class of integration failure that presents as a 403 with a token that looks
-     * entirely correct in a debugger.
+     * <p><strong>Shapes and names are different problems and this handles both.</strong> The
+     * javadoc here previously described three claim <em>names</em> — {@code scope}, {@code scp} and
+     * {@code roles} — while the code read exactly one, configured, and fell back to nothing. It
+     * handled two <em>shapes</em>: a space-delimited string and an array. That gap is very likely
+     * where the belief that multi-provider support already worked came from, and it cost a silent
+     * 403 against a correctly-issued Entra token.
+     *
+     * <p>Now: each name in {@code roles-claims} is read, each is accepted in either shape, and the
+     * results are unioned. Union rather than first-non-empty, because a provider emits several at
+     * once and the first is often the one carrying nothing this platform maps. See
+     * {@code SecurityConfiguration.ApiClientProperties.Jwt#getRolesClaims()} for the worked example.
+     *
+     * <p><strong>Public and static because there must be one reader.</strong>
+     * {@code EntityAccessGuard} resolves a caller's fiduciary entity from these same values when the
+     * issuer cannot carry a dedicated claim, and rules §2 is explicit that the two isolation layers
+     * must never be able to disagree about who the caller is. A second parser here would be a second
+     * way to disagree.
      */
-    private Set<String> scopes(Jwt jwt) {
-        Object raw = jwt.getClaim(config.getRolesClaim());
-        if (raw == null) {
-            return Set.of();
-        }
-        if (raw instanceof String single) {
-            return new LinkedHashSet<>(Arrays.asList(single.trim().split("\\s+")));
-        }
-        if (raw instanceof Iterable<?> many) {
-            Set<String> values = new LinkedHashSet<>();
-            many.forEach(value -> {
-                if (value != null) {
-                    values.add(value.toString());
+    public static Set<String> grantedValues(Jwt jwt,
+                                            SecurityConfiguration.ApiClientProperties.Jwt config) {
+        Set<String> values = new LinkedHashSet<>();
+        for (String claim : config.getRolesClaims()) {
+            Object raw = jwt.getClaim(claim);
+            if (raw == null) {
+                continue;
+            }
+            if (raw instanceof String single) {
+                for (String part : single.trim().split("\\s+")) {
+                    if (!part.isBlank()) {
+                        values.add(part);
+                    }
                 }
-            });
-            return values;
+            } else if (raw instanceof Iterable<?> many) {
+                many.forEach(value -> {
+                    if (value != null) {
+                        values.add(value.toString());
+                    }
+                });
+            }
         }
-        return Set.of();
+        return values;
     }
 }

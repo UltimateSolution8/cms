@@ -95,10 +95,10 @@ mvn test
 mvn verify
 ```
 
-`test` runs the unit suites — **151 cases** (33 in `consent-core`, 113 in `consent-policy`, 5 in
+`test` runs the unit suites — **154 cases** (33 in `consent-core`, 113 in `consent-policy`, 8 in
 `consent-service`), no Docker, about two seconds. `verify` adds the integration suites, which need
 Docker for a real PostgreSQL because the properties they check are database properties: 38 in
-`consent-ledger` and 366 in `consent-service`. **555 tests in total.**
+`consent-ledger` and 426 in `consent-service`. **610 tests in total.**
 
 Those are the figures the build prints, not an estimate. The README claimed 188 for several months
 after it stopped being true, and then 414 for one release after it stopped being true, which is a
@@ -325,8 +325,10 @@ Named rather than implied, so nobody assumes otherwise:
 - **An identity provider to point OIDC at.** The resource server is built and tested: bearer tokens
   are accepted alongside HTTP Basic, scopes map onto the same four roles so no route rule changed,
   and the human comes from a signed claim rather than a header. What does not exist is a configured
-  issuer — and its client registrations must set an `entity_id` claim on every scoped credential,
-  because an absent claim means group level
+  issuer — and every scoped credential must carry an `entity_id` claim **or an `entity.<ID>` app
+  role**, because a token with neither is group level. Entra cannot mint a custom claim for a custom
+  API without a claims-mapping policy and a custom signing key, which is why the app role exists;
+  `docs/OPERATIONS.md` §12.8.1 has the command that checks a real token
 - **A collector to send traces to.** `micrometer-tracing-bridge-otel` and the OTLP exporter are on
   the classpath and tracing is off by default; an exporter retrying into a void on every span is CPU
   spent on the decision path to produce nothing

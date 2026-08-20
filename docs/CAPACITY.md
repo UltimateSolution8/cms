@@ -328,3 +328,180 @@ Worth adding: **every configured rate-limit ceiling is above the measured single
 `decision` is 200/s against a measured ~50/s. A limiter whose threshold is four times what the
 service can serve will never fire before saturation, which means it currently protects nothing on
 that route. These numbers were set before anyone had a capacity figure; §7 is that figure.
+
+---
+
+## 8. Measured — the projection reconciliation sweep, 19 August 2026
+
+Phase 19 shipped a nightly job that re-derives **every chain in the database** and compares each
+artefact to what its events imply. `IntegritySweeper`'s javadoc calls itself the most expensive job
+the platform runs; this was a plausible rival, and it was asserted to be affordable rather than
+shown to be. This section is the measurement, and it found a defect.
+
+### 8.1 What was run
+
+Compose stack (`platform/docker`), the service and PostgreSQL 16 on one laptop, the same hardware
+caveat as §7: the JVM, the database and the client contend for the same cores, so **ratios between
+scales are evidence and absolute times are not.** `perf/seed.sql`, scaled down by overriding
+`subject_count`, run against a database that could be dropped — which is the only condition under
+which that file may be run at all.
+
+Server-side duration, `finishedAt − startedAt` off the sweep's own report, median of three:
+
+| Population | Chains re-derived | Artefacts | Sweep |
+|---|---|---|---|
+| baseline | 502 | 2 | **146 ms** |
+| 20k seed | 502 | 20,002 | **678 ms** |
+| 50k seed | 502 | 50,002 | **1,330 ms** |
+| 50k seed, after §8.3 | 802 | 50,002 | **570 ms** |
+
+Chain re-derivation costs **≈ 0.29 ms per subject** and is linear. Extrapolated to a million
+subjects that is ~5 minutes of a nightly window, which is affordable — and the extrapolation is
+the weakest number here, for the reason in §8.2.
+
+### 8.2 What this does **not** measure, and it is the larger half
+
+**`perf/seed.sql` writes projections and no events, by design** — its header argues the case, and
+the argument is right: seeding a hash chain in SQL means either reimplementing `ConsentLedger`
+badly or writing a broken chain that makes the integrity sweep scream. The consequence for *this*
+measurement is that the seeded population exercises the sweep's **artefact scan** and barely
+touches its **chain walk**: 50,002 artefacts against 502 chains, where production is roughly one
+chain per artefact.
+
+So the per-subject figure above rests on 502 real chains, and **the dominant cost at population
+scale has not been measured.** Closing that needs a fixture that produces valid chains at volume —
+captures through the API cost one BCrypt each (§7), so ~50 rps, so 20,000 subjects is about seven
+minutes of load rather than something a test can do. It is on `ROADMAP.md` with that check.
+
+**And the seed's shape exaggerates the finding below.** Every seeded artefact has no chain, so the
+anti-join returns 49,500 rows where production returns approximately zero.
+
+### 8.3 The defect this found: RLS makes the planner choose a quadratic plan
+
+`ConsentArtefactStore.countWithoutChain()` asked *"how many artefacts have no event behind them"*
+as a `not exists` anti-join. As the **application role** — the only role that matters, since that is
+what the service connects as — the row-level security policy calls `current_setting()`, which the
+planner cannot estimate. It therefore assumed 0.5% selectivity, **250 rows against 50,002**, and
+chose a nested loop:
+
+```
+Nested Loop Anti Join  (cost=0.00..3009.35 rows=250) (actual time=0.394..3436.078 rows=49500)
+  Rows Removed by Join Filter: 24974751
+```
+
+**3,438 ms**, and unchanged by `ANALYZE` — the estimate is structural, not stale. Rewritten as a set
+operation, which `HashSetOp` cannot nested-loop whatever the policy does to the estimate:
+
+**45 ms.** A 76× difference on a scheduled control, invisible to every test, because the suites run
+as the table's owner where the policy does not apply and the seeded populations are tiny.
+
+The rewrite is safe: `(entity_id, subject_id, purpose_code)` is `consent_artefact`'s primary key,
+so the rows are already distinct and `except` cannot collapse two findings into one.
+
+**The general lesson is worth more than the fix.** Any aggregate over an RLS-protected table plans
+against a fabricated selectivity estimate, and the failure is silent — a correct answer, slowly,
+degrading with population. `enforcement_decision` and `consent_event` carry the same policies. This
+is the first place it has been looked for.
+
+### 8.4 What the schedule should be
+
+Unchanged: nightly at 03:15, after the integrity sweep at 02:15, one instance through `SweepLock`.
+Nothing measured here argues for moving it. `projection-reconciliation-page-size` (200) is not the
+lever it looks like — it pages the chain walk, which is linear either way; the artefact scan runs
+once per sweep regardless.
+
+---
+
+## 9. Measured — Basic against Bearer, 20 August 2026
+
+§7 established that ~110 ms of every 115 ms a client observed was one BCrypt verification per
+request, that one instance therefore served ~50 rps, and that **"the fix is the authentication
+scheme"**. That last clause has been carried as an argument since Phase 12 and never tested. This
+section tests it.
+
+### 9.1 The run
+
+`perf/k6/decision.js`, twice, against the Compose stack over a real socket. Identical load shape
+(`RAMP=15s`, `DURATION=90s`, `ramping-arrival-rate`), identical population, identical thresholds —
+**only the `Authorization` header differs.** `DECISION_TOKEN` unset gives the Basic default
+unchanged, so §7's numbers stay comparable; set, it carries a client-credentials token minted
+against the development Keycloak realm (`platform/docker/keycloak`), `athena-dialer`.
+
+The paired Prometheus scrape is from `:9090/actuator/prometheus` at the same plateau, as §7
+established: k6 says what the client saw, the scrape says where the time went, and the difference
+between them is the finding.
+
+### 9.2 At 40 rps offered — both schemes serve it, and the client-side cost is the whole gap
+
+| | Basic | Bearer | |
+|---|---|---|---|
+| Served | 33.97 rps | 33.98 rps | identical, as intended |
+| Client median | **116.87 ms** | **11.04 ms** | 10.6× |
+| Client mean | 151.86 ms | 30.42 ms | 5.0× |
+| Client p95 | 300.77 ms | 115.46 ms | 2.6× |
+| Client min | 107.32 ms | **3.30 ms** | the floor is the measurement |
+| Peak VUs | 44 | 7 | the same arrival rate, six times less concurrency |
+| Server-side mean (`uds_consent_decision_seconds`) | 15.5 ms | 26.5 ms | — |
+
+**The minimum is the cleanest number here.** Under Basic no request in 4,079 completed faster than
+107 ms; under Bearer the fastest was 3.3 ms. There is no path through the platform that is 104 ms
+long, so that floor was the hash and nothing else.
+
+The server-side mean rising under Bearer is not a regression: with BCrypt gone, arrivals reach the
+engine in tighter bursts instead of being serialised by the hasher, so the engine is doing at 34 rps
+what it was previously protected from doing. §9.3 is where that resolves.
+
+### 9.3 At 180 rps offered — the ceiling moved, and it is not close
+
+| | Basic | Bearer |
+|---|---|---|
+| **Served** | **43.1 rps** | **153.0 rps** |
+| Client p95 | **5.58 s** | **8.11 ms** |
+| Client median | 4.22 s | 3.94 ms |
+| Client max | 7.16 s | 166.11 ms |
+| Iterations k6 could not issue | **13,098** (71% of the offered load) | **0** |
+| Errors | 0 | 0 |
+
+Server-side at the Bearer plateau: p50 **3.08 ms**, p95 **7.80 ms**, p99 30.3 ms, mean 3.70 ms over
+18,359 decisions. Hikari showed no pending connections and no timeouts.
+
+**Three things follow, and only the first was expected.**
+
+1. **The authentication ceiling is real and it is gone.** Basic saturated at 43 rps and stayed
+   there while k6 dropped seven of every ten requests it wanted to send; Bearer served every one of
+   180/s with room. That is ~3.5× on served throughput, and §7's "the fix is the authentication
+   scheme" is now measured rather than argued.
+2. **Under load the engine got *faster*, not slower.** Bearer p95 was 115 ms at 34 rps and 8.11 ms
+   at 153 rps, on the same code. The 34 rps run was the first traffic after a restart; the 153 rps
+   run followed 8,000 warm requests. **The 34 rps Bearer figures in §9.2 are a cold JVM and must
+   not be quoted as the platform's latency** — they are quoted here only because they are the half
+   of a matched pair whose other half was measured under identical conditions.
+3. **The published 30 ms p95 objective is met server-side and client-side under Bearer**, at three
+   times the throughput at which Basic misses it by two orders of magnitude. `OPERATIONS.md` §6's
+   objective is unchanged; what changed is that there is now a configuration under which a laptop
+   meets it.
+
+### 9.4 What this licenses, and what it does not
+
+The load generator, the database, the JVM and — this run only — a Keycloak container shared eight
+cores. **No absolute latency in this section may be quoted to a client**, and the 5.58 s Basic p95
+in particular is a laptop under self-contention, not a number Denave would see.
+
+What it does license is every statement about *where the time goes*, because both halves of each
+pair were measured under identical conditions minutes apart: the 104 ms floor, the 3.5× throughput
+difference, the 71% of offered load Basic could not absorb, and the fact that the residue after
+authentication is the engine rather than the pool or the socket.
+
+**What it does not settle:** the real ceiling under Bearer. 180 rps was chosen because
+`decision` is capped at 200/s per caller (`application.yml`) and the profile's own `'not rate
+limited'` check exists to make a limiter refusal visible rather than silent. The platform absorbed
+180 without strain, so **the JWT ceiling is above 180 rps and was not found.** Finding it means
+raising the per-caller cap or using several credentials, and that is a decision from the numbers
+rather than a measurement to take first — §7's guidance stands: `batch.js` amortises one
+authentication over a thousand identifiers and is what Denave is told to use for scrubbing.
+
+**And it does not remove the reason the pre-authentication limiter exists.** `PreAuthRateLimitFilter`
+was added because a refusal cost the defender more than the attacker. Under Bearer a 401 is a
+signature check rather than a BCrypt round, so the amplification is smaller — **not measured here**,
+and Basic remains enabled by default (`uds.consent.auth.basic-enabled`), so the expensive path is
+still reachable on every deployment that has not turned it off.

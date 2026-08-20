@@ -5,14 +5,17 @@ import com.uds.consent.ledger.store.OutboxStore;
 import com.uds.consent.ledger.store.PropagationCoverageStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
 import com.uds.consent.ledger.store.SigningKeyStore;
+import com.uds.consent.ledger.store.SweepRunStore;
 import com.uds.consent.service.EnforcementRecorder;
 import com.uds.consent.service.SdfObligationService;
 import com.uds.consent.service.sweeper.IntegritySweeper;
+import com.uds.consent.service.sweeper.ProjectionReconciliationSweeper;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * Health, in the compliance sense rather than the uptime sense.
@@ -49,12 +52,19 @@ public class PlatformHealthIndicator implements HealthIndicator {
     private final SigningKeyStore signingKeys;
     private final PropagationCoverageStore propagation;
 
+    private final ProjectionReconciliationSweeper projections;
+    private final SweepRunStore sweeps;
+
     public PlatformHealthIndicator(IntegritySweeper integrity, OutboxStore outbox,
                                    EnforcementRecorder recorder, ConsentManagerStore managers,
                                    ReconfirmationStore reconfirmations,
                                    SdfObligationService sdf, SigningKeyStore signingKeys,
-                                   PropagationCoverageStore propagation) {
+                                   PropagationCoverageStore propagation,
+                                   ProjectionReconciliationSweeper projections,
+                                   SweepRunStore sweeps) {
         this.propagation = propagation;
+        this.projections = projections;
+        this.sweeps = sweeps;
         this.integrity = integrity;
         this.outbox = outbox;
         this.recorder = recorder;
@@ -93,6 +103,25 @@ public class PlatformHealthIndicator implements HealthIndicator {
                 // one, and the decision path would stop for every entity to protest about
                 // somebody else's configuration. The only DOWN is a broken chain.
                 .withDetail("propagationUncovered", propagation.uncoveredCount())
+                // WHICH entities, not just how many. The gauge is group-wide and untagged to keep
+                // entity cardinality off a series read on every scrape — so the critical alert
+                // names no entity, and the responder's first step would otherwise be one call per
+                // fiduciary. Bounded at fifteen, so it costs nothing here.
+                .withDetail("propagationUncoveredEntities", propagation.uncoveredEntities())
+                // Artefacts that disagree with the chain that produced them, as at the last
+                // reconciliation sweep. A DETAIL and not a DOWN condition, deliberately: the
+                // divergence is already in the database and refusing traffic does not un-diverge
+                // it, while draining every replica would take the decision path down over a
+                // finding that needs a person to read it. The alert is what escalates this; health
+                // is what an operator sees when they look at one instance.
+                .withDetail("projectionDivergences", projections.lastReport().divergent())
+                .withDetail("lastProjectionSweep",
+                        projections.lastReport().finishedAt() == null
+                                ? "NOT_YET_RUN" : projections.lastReport().finishedAt())
+                // When each scheduled sweep last finished, read out of sweep_run so the answer is
+                // the same on every replica. A sweep that has never run reports NOT_YET_RUN rather
+                // than an age, because an age of zero would read as "just finished".
+                .withDetail("sweepLastRun", sweepAges())
                 .withDetail("outboxPending", pending)
                 .withDetail("outboxBacklog", pending > OUTBOX_BACKLOG_THRESHOLD)
                 // Anything above zero means the platform is currently taking decisions it cannot
@@ -152,5 +181,21 @@ public class PlatformHealthIndicator implements HealthIndicator {
             // throws takes the instance out of the load balancer over a metric.
             return null;
         }
+    }
+
+    /**
+     * When each sweep last finished, or {@code NOT_YET_RUN}.
+     *
+     * <p>Read out of {@code sweep_run} rather than out of any sweeper's memory: {@code SweepLock}
+     * runs a sweep on one instance at a time, so an in-memory answer would say "never" on every
+     * replica that skipped.
+     */
+    private Map<String, Object> sweepAges() {
+        Map<String, Object> ages = new java.util.TreeMap<>();
+        for (SweepRunStore.Run run : sweeps.all()) {
+            Long age = run.ageSeconds(Instant.now());
+            ages.put(run.sweepName(), age == null ? "NOT_YET_RUN" : age + "s ago");
+        }
+        return ages;
     }
 }

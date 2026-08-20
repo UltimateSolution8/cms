@@ -264,6 +264,19 @@ public class ConsentEventStore {
                 .map(StoredEvent::event);
     }
 
+    /** Purposes a subject holds at least one event for, oldest chain first. */
+    public List<String> findPurposeCodes(String entityId, String subjectId) {
+        return jdbc.sql("""
+                        select distinct purpose_code from consent_event
+                         where entity_id = :entityId and subject_id = :subjectId
+                         order by purpose_code
+                        """)
+                .param("entityId", entityId)
+                .param("subjectId", subjectId)
+                .query((rs, n) -> rs.getString("purpose_code"))
+                .list();
+    }
+
     /** Subjects holding at least one event, for the integrity sweep. */
     public List<String[]> findAllChainKeys(int limit, int offset) {
         return jdbc.sql("""

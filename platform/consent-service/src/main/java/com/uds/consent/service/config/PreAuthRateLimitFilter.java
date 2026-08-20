@@ -9,6 +9,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.security.SecurityProperties;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -59,7 +61,7 @@ import java.io.IOException;
  * depends on infrastructure it cannot prove is configured — {@code OPERATIONS.md} §12.2.
  */
 @Component
-@Order(SecurityProperties.DEFAULT_FILTER_ORDER - 10)
+@Order(SecurityProperties.DEFAULT_FILTER_ORDER - 30)
 public class PreAuthRateLimitFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(PreAuthRateLimitFilter.class);
@@ -78,27 +80,49 @@ public class PreAuthRateLimitFilter extends OncePerRequestFilter {
     private final PlatformMetrics metrics;
     private final ObjectMapper json;
     private final RateLimitBuckets buckets;
+    private final SecurityConfiguration.ApiClientProperties.Cors cors;
 
     public PreAuthRateLimitFilter(PlatformProperties properties, PlatformMetrics metrics,
-                                  ObjectMapper json) {
+                                  ObjectMapper json,
+                                  SecurityConfiguration.ApiClientProperties clients) {
         this.limits = properties.getRateLimit();
         this.metrics = metrics;
         this.json = json;
         this.buckets = new RateLimitBuckets(limits.getMaxTrackedCallers());
+        // Only to echo the origin on a refusal — this filter runs ahead of the CORS filter, so
+        // nothing else will. It makes no authorisation decision from it.
+        this.cors = clients.getCors();
     }
 
     /**
-     * Actuator is exempt, and this exemption matters more than the one it mirrors.
+     * Actuator is exempt, and so is a CORS preflight.
      *
-     * <p>The probes are called by the orchestrator every few seconds. Refusing a readiness probe
-     * during a flood would drain a healthy instance out of the load balancer at exactly the moment
-     * the fleet needs it — turning a defence against overload into an amplifier of one. On a
-     * separate management port the probes do not share this bucket in any case; the check stays so
-     * that a single-port deployment behaves the same way.
+     * <p>The actuator exemption matters more than the one it mirrors: the probes are called by the
+     * orchestrator every few seconds, and refusing a readiness probe during a flood would drain a
+     * healthy instance out of the load balancer at exactly the moment the fleet needs it.
+     *
+     * <p><strong>The preflight exemption is why this filter sits ahead of the CORS filter rather
+     * than behind it.</strong> An {@code OPTIONS} preflight carries no credential and costs no
+     * BCrypt — it is not the traffic this ceiling exists for — and a browser issues one per
+     * non-simple request, so counting them would halve the effective ceiling for a browser
+     * population behind one corporate address.
+     *
+     * <p>Registering CORS <em>ahead</em> of this filter was the first design and it opened a hole:
+     * Spring's {@code CorsFilter} short-circuits on any request whose origin fails the check, not
+     * only on preflights, so {@code POST /v1/evaluate} with {@code Origin: https://evil.example}
+     * would have been answered by the CORS filter and never reached this bucket at all —
+     * unmetered, and evadable with one header. Exempting the preflight here gets the same benefit
+     * without exempting every other method.
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getRequestURI().startsWith("/actuator");
+        return request.getRequestURI().startsWith("/actuator") || isPreflight(request);
+    }
+
+    private static boolean isPreflight(HttpServletRequest request) {
+        return HttpMethod.OPTIONS.matches(request.getMethod())
+                && request.getHeader(HttpHeaders.ORIGIN) != null
+                && request.getHeader(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD) != null;
     }
 
     @Override
@@ -122,11 +146,12 @@ public class PreAuthRateLimitFilter extends OncePerRequestFilter {
         log.warn("pre-authentication rate limit exceeded: address={} ({}/s, burst {})",
                 address, limit.getPermitsPerSecond(), limit.getBurst());
         metrics.rateLimited(METRIC_CLASS);
-        RateLimitRefusal.write(response, json,
+        RateLimitRefusal.write(request, response, json,
                 "Too many requests from this address. This ceiling applies before authentication, "
                         + "so it counts every request from here whether or not the credential on "
                         + "it is valid. The limit is " + limit.getPermitsPerSecond()
                         + " requests per second with a burst of " + limit.getBurst()
-                        + ". Back off and retry; do not retry immediately in a loop.");
+                        + ". Back off and retry; do not retry immediately in a loop.",
+                cors.getAllowedOrigins());
     }
 }

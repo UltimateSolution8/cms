@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -72,6 +73,60 @@ public class ArtefactProjector {
         int conflicts = current.sequenceNumber() < 0 ? 0
                 : artefacts.conflictCount(event.entityId(), event.subjectId(), event.purposeCode());
 
+        Step step = step(event, current);
+        if (step == null) {
+            // Clearly older than what is already projected, and not ambiguous. The event stays in
+            // the ledger as evidence of what the subject did; it just does not change current state.
+            log.debug("ignoring stale event for projection: entity={} subject={} purpose={} at={}",
+                    event.entityId(), event.subjectId(), event.purposeCode(), event.occurredAt());
+            return;
+        }
+        if (step.conflict()) {
+            log.warn("consent conflict: entity={} subject={} purpose={} incoming seq={} at={} "
+                            + "vs projected seq={} at={}",
+                    event.entityId(), event.subjectId(), event.purposeCode(),
+                    event.sequenceNumber(), event.occurredAt(),
+                    current.sequenceNumber(), current.lastEventAt());
+        }
+        artefacts.upsert(step.artefact(), conflicts + (step.conflict() ? 1 : 0));
+    }
+
+    /**
+     * Re-derives an artefact from a chain, touching nothing.
+     *
+     * <p>The reconciliation sweep's fold. It exists so that "what does the chain imply" and "what
+     * does the projector do" are <strong>the same code</strong> — {@link #step} decides both. A
+     * second fold written for the sweep would drift from this one and then report divergence where
+     * there is none, or, far worse, agree with itself in exactly the places where the real
+     * projector is wrong. That is the whole risk of reconciling a projection, and reuse is the only
+     * thing that answers it.
+     *
+     * @param chain the subject's events for one purpose, in ledger order
+     * @return the artefact the chain implies, or empty for an empty chain
+     */
+    public static Optional<ConsentArtefact> replay(List<ConsentEvent> chain) {
+        ConsentArtefact current = null;
+        for (ConsentEvent event : chain) {
+            if (current == null) {
+                current = project(event, null);
+                continue;
+            }
+            Step step = step(event, current);
+            if (step != null) {
+                current = step.artefact();
+            }
+        }
+        return Optional.ofNullable(current);
+    }
+
+    /**
+     * What one event does to an existing artefact, or null where it changes nothing.
+     *
+     * <p>Extracted from {@code apply} so the reconciliation sweep can ask the same question without
+     * writing. Every branch and its reasoning is unchanged; only the logging and the store call
+     * stayed behind.
+     */
+    private static Step step(ConsentEvent event, ConsentArtefact current) {
         if (event.type() == ConsentEventType.NOTICE_SERVED) {
             // Serving a notice is evidence that the person was TOLD. It is not evidence about what
             // they agreed to, and until Phase 18 the projection treated it as both.
@@ -99,37 +154,25 @@ public class ArtefactProjector {
             // disagrees inside the skew window, and a notice asserts no status, so it disagrees
             // with nothing. A stale notice is still ignored — the update sits inside supersedes(),
             // the same ordering rule everything else here obeys.
-            if (supersedes(event, current)) {
-                artefacts.upsert(withNotice(current, event), conflicts);
-            }
-            return;
+            return supersedes(event, current) ? new Step(withNotice(current, event), false) : null;
         }
 
         if (supersedes(event, current)) {
-            artefacts.upsert(project(event, current), conflicts);
-            return;
+            return new Step(project(event, current), false);
         }
 
         if (isAmbiguous(event, current)) {
             // Two surfaces disagree within the window where clocks cannot be trusted to order
             // them. Deny until a human resolves it: the ledger still holds both events, so
             // nothing is lost, and CONFLICTED is a denying status.
-            log.warn("consent conflict: entity={} subject={} purpose={} incoming seq={} at={} "
-                            + "vs projected seq={} at={}",
-                    event.entityId(), event.subjectId(), event.purposeCode(),
-                    event.sequenceNumber(), event.occurredAt(),
-                    current.sequenceNumber(), current.lastEventAt());
-
-            ConsentArtefact conflicted = withStatus(current, ConsentStatus.CONFLICTED);
-            artefacts.upsert(conflicted, conflicts + 1);
-            return;
+            return new Step(withStatus(current, ConsentStatus.CONFLICTED), true);
         }
 
-        // Clearly older than what is already projected, and not ambiguous. The event stays in the
-        // ledger as evidence of what the subject did; it just does not change current state.
-        log.debug("ignoring stale event for projection: entity={} subject={} purpose={} at={}",
-                event.entityId(), event.subjectId(), event.purposeCode(), event.occurredAt());
+        return null;
     }
+
+    /** The outcome of one event: the artefact it produces, and whether it counts as a conflict. */
+    private record Step(ConsentArtefact artefact, boolean conflict) { }
 
     /** Whether the incoming event is later than what is projected. */
     private static boolean supersedes(ConsentEvent event, ConsentArtefact current) {

@@ -146,6 +146,15 @@ class AdminApiIT extends PostgresIntegrationTest {
             Route.get("/v1/admin/integrity/DENAVE_IN/api-it-nobody", ADMIN),
             Route.sweep("/v1/admin/integrity/sweep", ADMIN),
             Route.get("/v1/admin/integrity/last", ADMIN),
+            // The projection's own integrity, and whether the jobs that maintain it are running.
+            // Added in the same change as the routes, which is what this suite's javadoc requires:
+            // a write route with no row here is a boundary nothing asserts.
+            Route.sweep("/v1/admin/projection/sweep", ADMIN),
+            Route.get("/v1/admin/projection/last", ADMIN),
+            Route.get("/v1/admin/projection/divergences" + E, ADMIN),
+            Route.get("/v1/admin/sweeps", ADMIN),
+            Route.get("/v1/admin/propagation/systems" + E, ADMIN),
+            Route.putSweep("/v1/admin/propagation/systems", ADMIN),
             Route.get("/v1/admin/provenance/quarantined" + E, ADMIN),
             Route.get("/v1/admin/provenance/summary" + E, ADMIN),
             Route.post("/v1/admin/provenance/00000000-0000-0000-0000-000000000000/substantiate",

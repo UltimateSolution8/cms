@@ -1,5 +1,6 @@
 package com.uds.consent.service.sweeper;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.uds.consent.ledger.store.RightsRequestStore;
 import com.uds.consent.service.config.PlatformProperties;
 import org.slf4j.Logger;
@@ -108,6 +109,7 @@ public class RightsSlaSweeper {
      * @param breachedRequestIds named rather than counted, because a count cannot be assigned to
      *                           anyone and the response to this is always "who is picking these up"
      */
+    @Schema(name = "RightsSlaReport")
     public record Report(Instant sweptAt, int breached, int approaching,
                          List<String> breachedRequestIds) {
 

@@ -344,6 +344,188 @@ class GuardianVerificationIT extends PostgresIntegrationTest {
 
     // -----------------------------------------------------------------------------------------
 
+    @Test
+    @DisplayName("minority established after capture denies the consent nobody verified a guardian for")
+    void minorityFoundAfterCaptureIsGatedAtTheDecision() {
+        // The hole this closes, and it is the one the capture-time refusal never reached.
+        //
+        // The person signs up as an ordinary adult would: no child attribute, no PARENTAL_VERIFIED,
+        // no guardian verification, and CaptureValidator has nothing to object to because nothing
+        // in the submission claims parental consent. The purpose IS open to children, so gate 7 —
+        // which only refuses purposes closed to them under s.9(3) — never fires either.
+        //
+        // Then somebody establishes they are fifteen. DPDP s.9(1) requires verifiable parental
+        // consent "before PROCESSING any personal data of a child", not before capturing it, and
+        // until this gate existed the platform kept acting on a consent that no guardian was ever
+        // verified for — while docs/TRACEABILITY.md graded s.9(1) satisfied.
+        String subject = newSubject();
+
+        ConsentCaptureService.Result captured = capture.capture(adultSubmission(subject));
+        assertThat(captured.isAccepted())
+                .withFailMessage("capture rejected: %s", captured.violations())
+                .isTrue();
+
+        // Allowed before anyone knows. This half matters: without it the test would pass against an
+        // engine that had simply started denying everybody on this purpose.
+        assertThat(policy.evaluate(decision(subject, NOW.plusSeconds(60))).isAllowed()).isTrue();
+
+        subjects.assertAge(ENTITY, subject, true, "school records", NOW.plusSeconds(120),
+                ActorType.ADMIN.name(), "priya@uds.example", "flagged during a data audit");
+
+        DecisionResponse afterwards = policy.evaluate(decision(subject, NOW.plusSeconds(180)));
+
+        assertThat(afterwards.isAllowed()).isFalse();
+        // The reason names the missing diligence, not the purpose. CHILD_SUBJECT_RESTRICTED would
+        // be false here — this purpose is open to children — and an operator told the wrong reason
+        // fixes the wrong thing: they would go looking at the purpose registry rather than at a
+        // consent that needs re-taking from a guardian.
+        assertThat(afterwards.reason()).isEqualTo(DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED);
+    }
+
+    @Test
+    @DisplayName("a replayed decision reads today's capture method, not the day's — pinned, not endorsed")
+    void aReplayedDecisionReadsTodaysCaptureMethod() {
+        // Gate 7 asks minority AS AT request.at(), deliberately, so a replayed decision answers the
+        // question the engine faced that day. Gate 11a asks what consent_artefact says NOW, because
+        // that is what the artefact is — and the whole engine reads current-state artefacts, so
+        // this is not new. It became load-bearing when a child-protection gate started reading one,
+        // and nothing named it.
+        //
+        // This test PINS the behaviour rather than asserting a property the platform has. Making
+        // gate 11a chain-aware means walking the chain on the decision path, which CAPACITY.md §7
+        // rules out against a 2.6 ms p95 — so it is a decision with a cost, and it should be taken
+        // deliberately rather than discovered. If this test starts failing, the two documents to
+        // revisit are .claude/rules/consent-management.md §6 and DECISIONS.md.
+        String subject = newSubject();
+
+        // A child, captured with no guardian evidence: denied, correctly.
+        capture.capture(adultSubmission(subject));
+        subjects.assertAge(ENTITY, subject, true, "school records", NOW.plusSeconds(60),
+                ActorType.ADMIN.name(), "priya@uds.example", "flagged during a data audit");
+        Instant beforeTheGuardianWasVerified = NOW.plusSeconds(120);
+        assertThat(policy.evaluate(decision(subject, beforeTheGuardianWasVerified)).reason())
+                .isEqualTo(DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED);
+
+        // Re-captured later WITH a verified guardian. The artefact now reads PARENTAL_VERIFIED.
+        capture.capture(childSubmission(subject, verification()));
+
+        // Replaying the earlier instant now allows, because the gate reads the artefact rather
+        // than the chain as it stood that day. That is the current-state reading, named.
+        assertThat(policy.evaluate(decision(subject, beforeTheGuardianWasVerified)).isAllowed())
+                .withFailMessage("gate 11a has become chain-aware; see rules §6 and DECISIONS.md "
+                        + "before accepting this as an improvement — it is a decision-path cost")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("a child whose guardian was verified at capture is still allowed")
+    void anEvidencedGuardianStillAllows() {
+        // The other side, and the assertion that fails if somebody later widens the gate to refuse
+        // every child. Rule 10's obligation is that the diligence be recorded — where it was, the
+        // consent is good and the processing is lawful.
+        String subject = newSubject();
+        capture.capture(childSubmission(subject, verification()));
+
+        assertThat(policy.evaluate(decision(subject, NOW.plusSeconds(60))).isAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("an adult is untouched by the guardian gate")
+    void anAdultIsUnaffected() {
+        // The population the gate must not reach. A guardian check that denied adults would be a
+        // platform-wide outage wearing the costume of a child protection.
+        String subject = newSubject();
+        capture.capture(adultSubmission(subject));
+
+        assertThat(policy.evaluate(decision(subject, NOW.plusSeconds(60))).isAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("processing carried by a legitimate use is not gated on a guardian")
+    void aLegitimateUseIsNotGated() {
+        // The assertion that fails the day somebody tidies the gate to cover every child, and the
+        // one the plan named and the phase originally shipped without.
+        //
+        // Gate 11a sits AFTER gate 10, and that placement is the whole of the scoping: a basis that
+        // needs no consent record returns before the gate is reached. s.7(i) employment is the live
+        // case — the group employs people under eighteen — and demanding guardian evidence for
+        // processing that consent was never carrying would refuse lawful processing.
+        //
+        // This is a POSITION, not what s.9(1) compels: read at its width the clause reaches all
+        // processing of a child's data. DECISIONS.md and REGULATORY_HANDOFF.md 8.6a record it as
+        // UDS's to confirm or replace, and this test is what pins the platform's current answer.
+        String employmentPurpose = "TEST_EMPLOYMENT_" + SEQUENCE.incrementAndGet();
+        publishing.publishPurpose(new PublishingService.NewVersion(
+                employmentPurpose, "Workforce administration", "legal",
+                "DPDP s.7(i) — employment processing, which consent does not carry.",
+                Map.of(Jurisdiction.IN,
+                        new PurposeRegistryStore.BasisEntry(LegalBasis.LEGITIMATE_USE_EMPLOYMENT, null, null)),
+                Set.of("CONTACT_PERSONAL"), Set.of(Channel.WEB), ExpiryPolicy.NONE, null,
+                FailureBehavior.FAIL_CLOSED, NOTICE, false, true, false, false),
+                "compliance-console");
+        catalog.refresh();
+
+        String subject = newSubject();
+        subjects.assertAge(ENTITY, subject, true, "school records", NOW,
+                ActorType.ADMIN.name(), "priya@uds.example", null);
+
+        DecisionResponse decided = policy.evaluate(new DecisionRequest(ENTITY, subject,
+                employmentPurpose, Channel.WEB, Jurisdiction.IN, APP, NOW.plusSeconds(60),
+                null, null, null, Map.of()));
+
+        assertThat(decided.reason())
+                .withFailMessage("the guardian gate reached a basis that needs no consent record")
+                .isNotEqualTo(DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED);
+    }
+
+    @Test
+    @DisplayName("a child with no consent record at all is denied, even on a fail-open purpose")
+    void aFailOpenPurposeDoesNotLetAChildThrough() {
+        // Found by qa-verifier, and it was exactly backwards: the fail-open branch returns an
+        // allowance BEFORE gate 11a, so a child whose consent WAS recorded but not
+        // PARENTAL_VERIFIED was denied while the same child with NO record at all was allowed.
+        // The gate refused the weaker case and permitted the stronger one.
+        //
+        // "No record" is precisely the state in which no guardian was ever verified, so a
+        // fail-open default — reasonable for an adult — cannot stand here.
+        String failOpen = "TEST_FAIL_OPEN_" + SEQUENCE.incrementAndGet();
+        publishing.publishPurpose(new PublishingService.NewVersion(
+                failOpen, "Service messaging", "legal",
+                "A child-permitted purpose that fails open when nothing is on record.",
+                Map.of(Jurisdiction.IN,
+                        new PurposeRegistryStore.BasisEntry(LegalBasis.CONSENT, null, null)),
+                Set.of("CONTACT_PERSONAL"), Set.of(Channel.WEB), ExpiryPolicy.NONE, null,
+                FailureBehavior.FAIL_OPEN, NOTICE, false, true, false, false),
+                "compliance-console");
+        catalog.refresh();
+
+        String subject = newSubject();
+        subjects.assertAge(ENTITY, subject, true, "school records", NOW,
+                ActorType.ADMIN.name(), "priya@uds.example", null);
+
+        DecisionResponse decided = policy.evaluate(new DecisionRequest(ENTITY, subject,
+                failOpen, Channel.WEB, Jurisdiction.IN, APP, NOW.plusSeconds(60),
+                null, null, null, Map.of()));
+
+        assertThat(decided.isAllowed())
+                .withFailMessage("a child with no consent record was allowed by the fail-open path")
+                .isFalse();
+        assertThat(decided.reason()).isEqualTo(DenialReason.CHILD_GUARDIAN_NOT_EVIDENCED);
+    }
+
+    private DecisionRequest decision(String subject, Instant at) {
+        return new DecisionRequest(ENTITY, subject, childPurpose, Channel.WEB, Jurisdiction.IN,
+                APP, at, null, null, null, Map.of());
+    }
+
+    /** An ordinary capture: nothing about it claims parental consent, so nothing refuses it. */
+    private CaptureSubmission adultSubmission(String subject) {
+        return new CaptureSubmission(ENTITY, subject, Jurisdiction.IN, "en", Channel.WEB, APP,
+                CaptureMethod.CHECKBOX_OPT_IN, ActorType.SUBJECT, subject, NOTICE, 1,
+                List.of(CaptureSubmission.PurposeChoice.acceptedSeparately(childPurpose)),
+                true, NOW, "adult-" + subject, null, Map.of(), null);
+    }
+
     private CaptureSubmission childSubmission(String subject, GuardianVerification verification) {
         return new CaptureSubmission(ENTITY, subject, Jurisdiction.IN, "en", Channel.WEB, APP,
                 CaptureMethod.PARENTAL_VERIFIED, ActorType.PARENT_GUARDIAN, "guardian-1", NOTICE, 1,

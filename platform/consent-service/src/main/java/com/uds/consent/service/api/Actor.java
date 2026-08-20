@@ -2,6 +2,8 @@ package com.uds.consent.service.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.core.Authentication;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -40,6 +42,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * @param clientId the authenticated API credential
  */
 public record Actor(String actorId, String clientId) {
+
+    private static final Logger log = LoggerFactory.getLogger(Actor.class);
 
     /** The header a calling console sets to name the person driving it. */
     public static final String HEADER = "X-UDS-Actor";
@@ -124,6 +128,25 @@ public record Actor(String actorId, String clientId) {
                 return value;
             }
         }
+
+        // The fallback is correct and is also the thing most worth knowing about, so it says so.
+        //
+        // Entra does not put preferred_username in an access token for a custom resource API
+        // unless somebody adds it as an optional claim on the resource registration, and Keycloak
+        // drops it too if a realm import names clientScopes (which replaces the built-in `profile`
+        // scope, silently — reproduced in Phase 23 on the first import of this project's own
+        // realm). Either way the first admin mutation writes a pairwise identifier into a table
+        // that cannot be corrected: meaningless outside the directory, different per application.
+        //
+        // WARN rather than a refusal, on EntityContactCheck's reasoning — it makes the evidence
+        // thin, not the decision wrong, and refusing would take the console down over a claim.
+        // Logged per request rather than once at start-up because the platform never sees a token
+        // until one arrives; the claims present are named so the fix is the configuration change
+        // rather than an investigation. OPERATIONS.md section 2.4 is the checklist.
+        log.warn("bearer token carries neither preferred_username nor email; falling back to sub, "
+                        + "which writes an opaque identifier into admin_audit_event permanently. "
+                        + "Claims present: {}. See OPERATIONS.md 2.4",
+                token.getClaims().keySet());
         return token.getSubject();
     }
 

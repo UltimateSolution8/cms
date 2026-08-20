@@ -34,13 +34,20 @@ import org.testcontainers.containers.PostgreSQLContainer;
 public abstract class PostgresIntegrationTest {
 
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            new PostgreSQLContainer<>("postgres:17-alpine")
                     .withDatabaseName("uds_consent")
                     .withUsername("uds_consent_owner")
                     .withPassword("uds_consent_owner")
                     // Creates the application role before Flyway runs, so that V2's privilege
                     // revocation takes its real branch rather than the "role not present" one.
-                    .withInitScript("db/testcontainer-init.sql");
+                    .withInitScript("db/testcontainer-init.sql")
+                    // PostgreSQL's default is 100 and the suite runs many Spring contexts against
+                    // one container, each holding its own pool. The pool is capped in
+                    // application-integrationtest.yml, which is the half that matters; this is
+                    // headroom, so that adding a suite fails on what the suite asserts rather than
+                    // on "sorry, too many clients already" from whichever context happened to boot
+                    // last — a failure that reports against a test with nothing wrong with it.
+                    .withCommand("postgres", "-c", "max_connections=300");
 
     static {
         POSTGRES.start();

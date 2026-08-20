@@ -1,0 +1,5 @@
+# The filled-in copy of .env.example. Everything in it is a live credential for a database that
+# holds regulated personal data by design intent.
+.env
+*.env
+!.env.example

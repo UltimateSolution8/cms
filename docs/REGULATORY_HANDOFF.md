@@ -609,6 +609,41 @@ of the same thing that disagree is how one of them stops being read.*
 
 ---
 
+### 8.6a A child found after capture — what the group does with the denials
+
+**Phase 19 changed a decision the platform makes, and the consequence lands on UDS rather than on a
+commit.** `PolicyEngine` now refuses a decision for a subject who is a child when the consent being
+relied upon was not captured as verifiably given by a parent or lawful guardian — DPDP **s.9(1)**
+with **Rule 10**, applied at processing rather than only at capture, because s.9(1) says *"before
+processing any personal data of a child"*.
+
+The capture path was already closed. What was open, and is now closed, is the person whose minority
+is established **after** their consent was taken: the consent was captured when nobody knew, and
+nothing asked again.
+
+**Three things UDS has to decide, and none of them is code:**
+
+1. **What happens to the denials.** Every existing consent for a subject later asserted a minor now
+   refuses, on a reason code (`CHILD_GUARDIAN_NOT_EVIDENCED`) that no runbook mentioned before this
+   phase and no alert rule expects. If the group has any under-eighteen population in its CRM, the
+   day this ships is the day those decisions start refusing. **The platform does not know how many**
+   — that is a query against `subject_age_assertion` per entity, and it should be run before the
+   change reaches production rather than after.
+2. **Whether re-consent is sought, and by whom.** The honest remedy is re-taking the consent from a
+   verified guardian. That is an outreach campaign with a script and an owner, not a configuration
+   change, and until it happens those subjects are simply not contactable on those purposes — which
+   is the correct outcome and is also a commercial one.
+3. **Whether the narrow reading is the group's reading.** The gate applies only where the decision
+   rests on **consent**. Processing carried by a legitimate use or a legal obligation — s.7(i)
+   employment is the live case, and the group employs people under eighteen — returns before the
+   gate and is not checked. s.9(1) read at its width would reach that too. **The narrow reading is
+   the platform's position, taken under the instruction not to over-engineer the legal-policy side,
+   and it is stated rather than hidden.** If UDS's counsel reads s.9(1) more widely, the gate moves,
+   and that is a decision with a clause behind it rather than an implementation detail.
+
+**No other regime requires this.** GDPR Art. 8 is a consent-validity rule at collection; PIPA, PDPA
+and CCPA have no analogue. Do not let a later document describe the gate as a GDPR control.
+
 ### 8.7 Propagation — who must be told, and the honest limits of the evidence
 
 **The question the platform could not answer.** *A principal withdrew. Prove it reached every
@@ -689,6 +724,40 @@ Two operational notes for whoever fills this in:
   unpublished, so the reconciler never runs for it; it surfaces instead as `FAILED` rows in
   `webhook_delivery` and as the relay's alert after ten attempts. The two artefacts answer different
   questions, and neither one alone answers *"is DenCRM current?"*
+
+---
+
+### 8.8 Who assigns the entity role, and to whom
+
+**The isolation control has moved partly outside this repository, and that is the cost of pointing
+the platform at a real identity provider.**
+
+Before Phase 21, which fiduciary a caller could act for was a client map in `application.yml`, under
+change control here, asserted by tests here. Under OIDC it can also be an app-role assignment in the
+group's directory — `entity.DENAVE_IN`, `entity.MATRIX` — which no test in this repository can
+execute, no document under `docs/` describes, and `RowLevelSecurityIT` passes regardless of.
+
+The platform's half is done and is not the open question: one resolver feeds both isolation layers,
+two `entity.*` roles on one token are refused rather than resolved to whichever the set iterated
+first, and the resolved value is asserted at the **database session variable** rather than at an
+HTTP status — which is the only assertion that can see the two layers disagreeing.
+
+**What UDS owns:**
+
+| Question | Why it cannot be answered here |
+|---|---|
+| Who may assign `entity.<ID>` in the tenant, and under what approval | It is a directory permission, granted to directory administrators, and the platform holds no record of it |
+| What the standing assignment is — which people hold which entity role, reviewed how often | The platform can report what a *presented token* claimed; it cannot enumerate the directory |
+| Whether a person may hold **no** entity role | **Absent reads as group level today**, for both authentication schemes, so silence is the widest possible grant. Group-level-as-an-explicit-opt-in is on `ROADMAP.md` with the check that closes it; until then, an issuer that simply forgot produces total access and nothing looks wrong |
+| Who reviews the assignment when somebody changes teams | The withdrawal case: a Denave administrator who moves to Matrix keeps reading Denave until the role is removed, and the platform will not notice |
+
+**The check that closes this:** a named owner for the assignment, a written rule for who may hold
+which entity role, and a periodic review with a date. Until then, the honest answer to *"could a
+Denave administrator have read Matrix's records"* is: only if somebody in a different system
+assigned a role correctly, and this platform holds no evidence either way.
+
+The command that decodes a real token and shows what it actually claims is `OPERATIONS.md` §12.8.1;
+the tenant checklist that has to be run before any of this is live is §2.3a.
 
 ---
 

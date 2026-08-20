@@ -21,6 +21,18 @@ either an invariant or a pointer.
   argument is in `V28`'s header — do not re-open it because the table looks unbounded.
   `enforcement_decision`, whose growth is bounded by traffic rather than population, is partitioned
   monthly and `PartitionMaintenanceSweeper` provisions three months ahead.
+- **A partition is a table, and neither a grant nor a revoke on the parent reaches it.** PostgreSQL
+  checks DML privileges on the relation *named in the query*, and the provisioning scripts'
+  `alter default privileges` grant `update`/`delete` on everything the owner creates — so `V28`'s
+  revoke held for `update enforcement_decision` and not for
+  `update enforcement_decision_2026_08`. Measured against a real database in Phase 22, where the
+  **row triggers refused the write anyway**: one of two layers missing, not an open hole, and
+  recorded at that severity rather than the first-suspected one. Closed in `V34`, which revokes on
+  every existing partition and inside the function that creates the next. **Creation itself is
+  `uds_ensure_enforcement_partition`, `SECURITY DEFINER` with the parent table hardcoded** —
+  partition DDL needs ownership of the parent, which the application role must never hold, and a
+  parameterised form of that function would be a privilege-escalation primitive. It must never read
+  an entity-scoped table: on a managed database the definer holds `BYPASSRLS`.
 - A **receipt pins the consented purpose version**, not the current one. A taxonomy change must never
   retroactively alter what a principal is recorded as having agreed to.
 - **The receipt's standards claim is `iso-27560:2023-receipt-subset`, and the suffix is load-bearing.**
@@ -34,6 +46,49 @@ either an invariant or a pointer.
 - Integrity is `POST /v1/admin/integrity/sweep` (plus `…/last` and `…/{entityId}/{subjectId}`).
   **There has never been an `…/integrity/verify`** — it was written into a runbook and believed for
   months. Check a route exists before instructing anyone to call it.
+- **A verified chain says nothing about the projection, and until Phase 19 nothing checked the
+  projection at all.** `last_event_hash` is *copied* onto `consent_artefact` rather than derived from
+  its `status`, so an artefact whose status is wrong stays perfectly self-consistent and the
+  integrity sweep verifies it happily. Two of this programme's headline defects were projection
+  defects that every control passed — C8's purpose version, Phase 18's `NOTICE_SERVED`. The control
+  is `POST /v1/admin/projection/sweep` (plus `…/last`), nightly at 03:15, **after** the integrity
+  sweep. It **reports and does not repair**: a projector defect and a direct `UPDATE` of
+  `consent_artefact` produce an identical divergence and only one of them is a security incident, so
+  re-projecting automatically would erase the distinction before anybody saw it. Its fold is
+  `ArtefactProjector.replay` — **the projector's own**, never a second implementation, because a
+  second fold agrees with itself in precisely the places where the real projector is wrong.
+- **`purpose_version = 0` is `ConsentEvent.NO_PURPOSE_VERSION_ASSERTED`, a sentinel and not a
+  version.** Versions start at 1. `ExpirySweeper` writes it because an expiry ends an agreement
+  without restating its terms, and the projector carries the prior version forward rather than
+  projecting the zero. Anything comparing projection against chain must read it as *no assertion*, or
+  every expired artefact in the database reports as divergent.
+- **A sweep that stopped is now visible.** `SweepLock` writes `sweep_run` (V32) for all eight jobs,
+  in the database rather than in memory — it runs a sweep on one instance at a time, so an in-memory
+  timestamp reads "never ran" on every replica that skipped, permanently, and an alert over that can
+  never clear. A sweep with no row reports **no age at all**, never zero: zero renders as "just
+  finished", which is the healthiest possible value for the exact condition being watched.
+  **It records that a job ran, never that it worked** — `last_outcome` is `OK` whenever the body
+  returned, so a sweep whose query has silently stopped matching writes a clean run indefinitely.
+  There is no generic fix: the expectation differs per sweep, so the answer is to watch each one's
+  *output* where it has one (`outbox.pending`, `projection.divergent`, `propagation.uncovered`).
+  Do not read an `OK` as evidence that a control is working.
+- **The projection report is counts group-wide, identifiers per entity.**
+  `POST /v1/admin/projection/sweep` and `…/last` name nobody: the sweep re-derives every chain in
+  the database, so a group-wide route carrying subject ids would sit outside both layers of §2 at
+  once — no entity for the guard to read, and no RLS in the path because the sweep gathered the
+  rows. `GET /v1/admin/projection/divergences?entityId=` is the scoped read. **The count is exact
+  and only the retained sample is capped**, because a capped count would understate the one case
+  the control exists for: a systemic projector defect, which produces a divergence per artefact.
+  **The general rule, and it is what to check when adding a route: a background job's output is not
+  covered by layer two.** RLS scopes the *session that queries*, so a route returning rows the
+  request itself selected is protected even with no entity in the path — `GET
+  /v1/admin/subscriptions/deliveries/{outboxId}` carries `subjectId` and is safe for exactly that
+  reason. A route returning rows a **sweeper** gathered is not, because the sweeper ran group-level
+  on a different session. Audited across the admin surface in Phase 20: the projection report was
+  the only one carrying **subject** identifiers, and it is **not** the only one on the wrong side of
+  the rule — `POST /v1/admin/retention/sweep`, `…/reconfirmation/sweep` and the breach SLA sweep all
+  return unbounded group-wide lists of *row* ids a background job gathered. Lower severity, same
+  shape, on `ROADMAP.md`.
 
 ## 2. Isolation is two layers, and they must agree
 
@@ -42,11 +97,27 @@ either an invariant or a pointer.
   bodies are not parsed, because reading the stream in a filter consumes it.
 - Layer two: PostgreSQL RLS, `V13__row_level_security.sql`, pushed into the session by
   `EntityScopedDataSource`. It applies to every statement whatever route the value took.
-- **One resolver feeds both:** `EntityAccessGuard.currentEntityClaim(...)`. Phase 11's worst defect was
+- **One resolver feeds both:** `EntityAccessGuard.currentEntityClaim(...)`. **It now has two sources for a
+  token and that changed nothing about the rule.** A JWT's entity comes from the configured claim
+  (`entity_id`) or, where the issuer cannot mint one, from an app role `entity.<ID>` — read through
+  `JwtRoleConverter.grantedValues`, the *same* parser the authorities go through, so a claim shape
+  one understood and the other did not is unrepresentable. **Two `entity.*` roles on one token are
+  refused, never first-wins**: a set's iteration order would otherwise decide which fiduciary a
+  caller reads, and both layers would agree on the wrong answer. Keying the entity on the token's
+  *application* (`azp`) was the first design and is wrong — in a browser flow that is one value for
+  every human who signs in, so the boundary becomes which app you authenticated to. Phase 11's worst defect was
   the two layers disagreeing about who the caller was — a bearer token's subject is not in the client
   map, resolved to "no claim", and no claim reads as *group level*, so a token scoped to Denave read
   every entity in the group through both layers at once with nothing logged. Never resolve a caller's
   scope anywhere else.
+- **CORS is not part of either layer, and must not be read as if it were.** It decides which origins
+  a *browser* will let read a response; it decides nothing about who may call. The allowlist
+  (`uds.consent.security.cors.allowed-origins`, empty by default) exists so a console and the
+  principal portal can be reached at all. Its filter is registered at
+  `DEFAULT_FILTER_ORDER - 20` — **ahead of `PreAuthRateLimitFilter`** — because a refusal written by
+  that filter carries no `Access-Control-Allow-Origin`, so a rate-limited browser client would be
+  told its origin was wrong. `CorsIT.preflightsOutrunTheFloodCeiling` is the test that fails if
+  somebody moves it into the security chain.
 - Layer one is a **list of path prefixes** and lists get forgotten; layer two is derived. A new
   entity-scoped table therefore needs its RLS policy in its own migration, and `RowLevelSecurityIT`
   reads the protected set out of `information_schema`, so it starts failing on its own when one is
@@ -94,6 +165,17 @@ one.
   from the register — bounded, and it returns to zero when configuration is fixed, which is what
   makes it alertable. `propagation_gap` is append-only history, one row per system per day, and
   **nothing alerts on it**: a count that can only grow fires forever and is muted within a week.
+- **`system_code` is not free text any more.** `propagation_system` (V33) is the vocabulary an
+  entity declares, and `propagation_target` and `webhook_subscription` both carry a foreign key to
+  it — so a target for `DENCRM` against a subscription named `DENCRM_PROD` is refused at the `PUT`
+  rather than producing a daily gap row, permanently, in an **append-only** table, for a system that
+  is in fact reachable. `fulfilment_target` already failed loud and closed on this class of error;
+  propagation failed quiet and wrote. A code is retired with `active = false` and **never deleted** —
+  the `propagation_gap` rows naming it have to stay readable.
+- **The relay claims its batch with `for update skip locked`** (`OutboxStore.claimUnpublished`),
+  inside the transaction that publishes. It deliberately takes no `SweepLock`: that would serialise
+  fan-out onto one instance. Before it, three replicas drained the same rows every two seconds and
+  `webhook_delivery` carried up to three rows per attempt — an evidence table that over-counts.
 - **The gap's `reason` records an observation, never a conclusion.** `NO_DELIVERY_CHANNEL` means the
   configured publisher writes no delivery evidence at all — `log` (the default) and `kafka` — and
   writing `NOT_DELIVERED` there would assert that a system was not told when the platform has no way
@@ -172,9 +254,58 @@ did.
   reachable without a credential. Status reads return status and dates — **never** the evidence
   bundle; a token mailed to an address is not the standard on which to hand over a person's file.
 
+### The other gate: a child's guardian, at the decision
+
+`PolicyEngine` gate 7 refuses a purpose closed to children (**s.9(3)**). **Gate 11a refuses a
+purpose that IS open to them when the consent being relied on records no verified guardian** —
+**s.9(1)** with **Rule 10**, where the diligence is the obligation and the consent is only its
+output. s.9(1) says *"before processing any personal data of a child"*, not before capturing it, and
+the live hole was a subject whose minority is established **after** capture: `CaptureValidator`
+refuses an unevidenced parental capture, and nothing asked again.
+
+The evidence is `artefact.captureMethod() == PARENTAL_VERIFIED`, and that proxy was checked rather
+than assumed: `ConsentCaptureService.capture` is the only path that puts a submission's capture
+method on an event, it validates first and returns rejected before recording, and every other write
+path stamps `NOT_APPLICABLE`.
+
+**It is placed after gate 10, and that placement is the scoping.** A basis needing no consent record
+— s.7(i) employment, legal obligation — has already returned, so the gate never refuses processing
+that consent was not carrying. The wider reading of s.9(1) would reach those too; **the narrower one
+is taken deliberately** under the instruction not to over-engineer the legal-policy side, and is a
+position rather than what the clause compels. `GuardianVerificationIT.aLegitimateUseIsNotGated` is the test that fails if somebody widens it past
+gate 10, and `anAdultIsUnaffected` / `anEvidencedGuardianStillAllows` cover the rest. This section
+named only the latter two for one build — neither of which covers widening, which is the wrong turn
+it is written to prevent.
+
+**Gate 11a reads the artefact's `captureMethod` as it stands now, where gate 7 asks minority *as at*
+`request.at()`.** The whole engine reads current-state artefacts, so this is not new — it became
+load-bearing when a child-protection gate started reading one. A decision replayed at an instant
+before a later guardian-verified re-capture therefore *allows*.
+`GuardianVerificationIT.aReplayedDecisionReadsTodaysCaptureMethod` pins that, deliberately, so
+changing it is a decision somebody takes rather than one they discover: making the gate chain-aware
+means walking the chain on the decision path, which `CAPACITY.md` §7 rules out against a 2.6 ms p95.
+
+**A child with no consent record at all is denied too**, and that had to be fixed rather than
+assumed: the `FAIL_OPEN` branch returns an allowance *before* this gate, so for one build a child
+whose consent was recorded but unverified was refused while the same child with nothing on record
+was allowed. `aFailOpenPurposeDoesNotLetAChildThrough` pins it.
+
+**No regime but DPDP requires this** — GDPR Art. 8 is a consent-validity rule at collection. Do not
+let a document describe it as a GDPR control.
+
 ## 7. Migrations
 
-`V1`–`V31` exist in `platform/consent-ledger/src/main/resources/db/migration/`; next is **`V32`**.
+**A migration runs against a database somebody else configured, and it may not assume the
+configuration protects it.** On a managed provider the schema owner holds `BYPASSRLS` and the
+provider declares default privileges granting its own HTTP-exposed roles — `anon` is the key inside
+a browser bundle — `arwdDxtm` on every table and `EXECUTE` on every function the owner creates.
+Those are applied **at creation time**, so `deploy/hosted/provision.sql` running before the first
+migration cannot protect anything a later migration adds. `V34` therefore revokes `anon`,
+`authenticated` and `service_role` from its own function, conditionally, the same shape every
+migration here uses for `uds_consent_app`. Any migration adding a function must do the same, and
+`deploy/hosted/verify.sql` is what proves it rather than the intent.
+
+`V1`–`V34` exist in `platform/consent-ledger/src/main/resources/db/migration/`; next is **`V35`**.
 Removing a table is worse than not running code — speculative surface is flagged dark and the
 migration stays. New entity-scoped table ⇒ `entity_id`, an RLS policy on `uds_entity_claim()`
 following V13's shape, an index, and a prefix in `EntityAccessGuard` if it has an entity-bearing

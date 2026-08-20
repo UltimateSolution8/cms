@@ -374,6 +374,7 @@ public class SecurityConfiguration {
         private Map<String, Client> clients = new LinkedHashMap<>();
         private boolean basicEnabled = true;
         private Jwt jwt = new Jwt();
+        private Cors cors = new Cors();
 
         public Map<String, Client> getClients() {
             return clients;
@@ -400,6 +401,63 @@ public class SecurityConfiguration {
             this.basicEnabled = basicEnabled;
         }
 
+        public Cors getCors() {
+            return cors;
+        }
+
+        public void setCors(Cors cors) {
+            this.cors = cors;
+        }
+
+        /**
+         * Cross-origin access, for the browser clients this platform did not originally have.
+         *
+         * <p><strong>Empty by default, which means off.</strong> Every existing caller is a machine
+         * sending an {@code Authorization} header from a server, and none of them is subject to a
+         * preflight. So an empty allowlist leaves the platform behaving exactly as it did.
+         *
+         * <p>Exact origins only, never {@code *}. The list is short and it is the one place that
+         * says which browser applications exist.
+         */
+        public static class Cors {
+
+            private List<String> allowedOrigins = new ArrayList<>();
+            private long maxAgeSeconds = 1800;
+
+            /**
+             * Origins permitted to make cross-origin requests. Empty disables CORS entirely.
+             *
+             * <p>Includes the data-principal portal's origin rather than opening
+             * {@code /v1/portal/**} to everything. The portal is deliberately not a subject
+             * enumeration oracle (rules §6) so a wildcard would not disclose anything — but its
+             * verify route consumes a single-use code against a per-address bucket, and a JSON
+             * preflight is currently the only thing stopping that being driven from arbitrary
+             * visitors' browsers, which is a distributed-address path around a per-address limit.
+             */
+            public List<String> getAllowedOrigins() {
+                return allowedOrigins;
+            }
+
+            public void setAllowedOrigins(List<String> allowedOrigins) {
+                this.allowedOrigins = allowedOrigins;
+            }
+
+            /**
+             * How long a browser may cache a preflight.
+             *
+             * <p>Not a tuning knob so much as a load one: without it every non-simple request costs
+             * two, and the second one lands on the pre-authentication bucket that exists to keep a
+             * flood cheap.
+             */
+            public long getMaxAgeSeconds() {
+                return maxAgeSeconds;
+            }
+
+            public void setMaxAgeSeconds(long maxAgeSeconds) {
+                this.maxAgeSeconds = maxAgeSeconds;
+            }
+        }
+
         public Jwt getJwt() {
             return jwt;
         }
@@ -421,8 +479,9 @@ public class SecurityConfiguration {
             private String issuerUri;
             private String publicKey;
             private String audience;
-            private String rolesClaim = "scope";
+            private List<String> rolesClaims = new ArrayList<>(List.of("scope", "scp", "roles"));
             private String entityClaim = "entity_id";
+            private String entityRolePrefix = "entity.";
             private Map<String, String> scopeRoles = new LinkedHashMap<>(Map.of(
                     "consent.decision", "DECISION",
                     "consent.capture", "CAPTURE",
@@ -468,13 +527,29 @@ public class SecurityConfiguration {
                 this.audience = audience;
             }
 
-            /** Claim carrying the granted scopes — a space-delimited string or a list. */
-            public String getRolesClaim() {
-                return rolesClaim;
+            /**
+             * Claims that may carry granted scopes. Every one of them is read, and the results are
+             * unioned.
+             *
+             * <p><strong>A union rather than the first non-empty claim, and the difference is not
+             * cosmetic.</strong> Providers disagree about the name: Keycloak emits {@code scope},
+             * Entra emits {@code scp} for delegated scopes and {@code roles} for app roles. They
+             * also emit more than one at once — an Entra delegated token routinely carries
+             * {@code scp: "openid profile"}, none of which this platform maps, beside
+             * {@code roles: ["consent.admin"]}, which it does. First-non-empty would take
+             * {@code scp}, find nothing mappable, and refuse a token that carries a valid grant
+             * while naming the wrong claim in the diagnostic.
+             *
+             * <p>There is no security cost to reading all of them: {@code JwtRoleConverter} does an
+             * allowlist lookup against {@link #getScopeRoles()}, so a union cannot grant anything
+             * that map does not name.
+             */
+            public List<String> getRolesClaims() {
+                return rolesClaims;
             }
 
-            public void setRolesClaim(String rolesClaim) {
-                this.rolesClaim = rolesClaim;
+            public void setRolesClaims(List<String> rolesClaims) {
+                this.rolesClaims = rolesClaims;
             }
 
             /**
@@ -494,6 +569,33 @@ public class SecurityConfiguration {
 
             public void setEntityClaim(String entityClaim) {
                 this.entityClaim = entityClaim;
+            }
+
+            /**
+             * Prefix marking a role value that names a fiduciary entity — {@code entity.DENAVE_IN}.
+             *
+             * <p><strong>Why a role and not a custom claim.</strong> Microsoft Entra will not put an
+             * arbitrary claim such as {@code entity_id} into an access token for a custom API
+             * without a claims-mapping policy and a custom signing key. App roles need neither, are
+             * assignable to users and groups rather than to applications, and arrive in a claim
+             * this converter already reads. So an entity can be carried by an issuer that cannot
+             * carry {@link #getEntityClaim()}.
+             *
+             * <p><strong>Keying it on the application instead would have been wrong</strong>, and it
+             * was the first design. In a delegated flow {@code azp} is the browser client's id —
+             * one value for every human who signs in — so a map from it to an entity says "everyone
+             * who can reach this console is Denave", and the isolation boundary becomes which
+             * application you authenticated to rather than who you are.
+             *
+             * <p><strong>Two entity roles on one token are refused, never first-wins.</strong>
+             * Iteration order would otherwise decide which fiduciary a caller could read.
+             */
+            public String getEntityRolePrefix() {
+                return entityRolePrefix;
+            }
+
+            public void setEntityRolePrefix(String entityRolePrefix) {
+                this.entityRolePrefix = entityRolePrefix;
             }
 
             /**

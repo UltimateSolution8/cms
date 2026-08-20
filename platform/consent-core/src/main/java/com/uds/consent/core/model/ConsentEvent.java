@@ -73,6 +73,27 @@ public record ConsentEvent(
         String previousHash,
         String eventHash) {
 
+    /**
+     * The value {@code purposeVersion} carries when the event asserts no version at all.
+     *
+     * <p>Purpose versions start at 1, so {@code 0} cannot collide with a real one. It is written by
+     * {@code ExpirySweeper} and by {@code ConsentCaptureService.invalidate}, because an expiry and an
+     * invalidation <em>end</em> an agreement without restating its terms — there is no version for
+     * them to assert, and inventing one would put an affirmative false claim in an append-only
+     * table.
+     *
+     * <p><strong>A sentinel, not a defect, and the distinction matters twice.</strong> An unstated
+     * version is a weak value; a wrong version is a false statement, which is why
+     * {@code ArtefactProjector} carries the prior version forward for these types rather than
+     * projecting the zero. And it is why anything comparing a projection against the chain — the
+     * reconciliation sweep — must read this value as "no assertion" rather than as a disagreement,
+     * or every expired artefact in the database reports as divergent.
+     *
+     * <p>Named here rather than left as a bare literal at two write sites and a third reader: until
+     * it was, a reader had no way to tell it from a real version.
+     */
+    public static final int NO_PURPOSE_VERSION_ASSERTED = 0;
+
     /** Genesis value for the first event in a subject's chain. */
     public static final String GENESIS_HASH = "0".repeat(64);
 

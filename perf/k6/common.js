@@ -33,12 +33,39 @@ export function basic(user, password) {
   return `Basic ${encoding.b64encode(`${user}:${password}`)}`;
 }
 
-export const DECISION_AUTH = basic(
+// A bearer token instead, when one is supplied. The default is unchanged, deliberately:
+// CAPACITY.md section 7's numbers were measured under Basic, and a profile whose baseline moved
+// silently measures nothing. Set DECISION_TOKEN and the same script measures the other scheme
+// against the same load, which is the comparison section 9 is for.
+//
+// Section 7 established that ~110 ms of every 115 ms a client observed was one BCrypt
+// verification per request — no session, no cache — so one instance served ~50 rps and the
+// ceiling was CPU rather than the database. "The fix is the authentication scheme" has been
+// carried as an argument since Phase 12 and never tested. JWT verifies a signature against a
+// cached JWKS instead, which should be cheap; should is the word this override exists to remove.
+//
+// Mint one against the development realm (platform/docker/keycloak):
+//
+//   DECISION_TOKEN=$(curl -s -X POST \
+//     http://localhost:8081/realms/uds/protocol/openid-connect/token \
+//     -d grant_type=client_credentials -d client_id=athena-dialer \
+//     -d client_secret=dev-athena-secret | jq -r .access_token)
+//
+// The realm sets accessTokenLifespan to ten minutes for exactly this: the Keycloak default is
+// five, and a token expiring mid-plateau produces a cliff of 401s that looks like a platform
+// failure and gets measured as one.
+function bearerOr(token, user, password) {
+  return token ? `Bearer ${token}` : basic(user, password);
+}
+
+export const DECISION_AUTH = bearerOr(
+  __ENV.DECISION_TOKEN,
   __ENV.DECISION_CLIENT || 'athena-dialer',
   __ENV.DECISION_SECRET || 'dev',
 );
 
-export const CAPTURE_AUTH = basic(
+export const CAPTURE_AUTH = bearerOr(
+  __ENV.CAPTURE_TOKEN,
   __ENV.CAPTURE_CLIENT || 'denave-web',
   __ENV.CAPTURE_SECRET || 'dev',
 );

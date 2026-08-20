@@ -6,6 +6,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -44,6 +46,9 @@ import java.io.IOException;
 @Order(Ordered.LOWEST_PRECEDENCE - 110)
 public class CallerAttributionFilter extends OncePerRequestFilter {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(CallerAttributionFilter.class);
+
     private static final String MDC_CLIENT = "clientId";
     private static final String MDC_ACTOR = "actor";
 
@@ -58,6 +63,25 @@ public class CallerAttributionFilter extends OncePerRequestFilter {
         CallerContext.setClientId(clientId);
         if (clientId != null) {
             MDC.put(MDC_CLIENT, clientId);
+        } else if (authentication != null && authentication.isAuthenticated()) {
+            // An authenticated caller with no name at all, which means the credential half of
+            // rules section 5 is about to be written as NULL into an append-only table while the
+            // human half looks perfect.
+            //
+            // Found in Phase 23 against a real issuer and not against a token this repository
+            // minted: Keycloak carries `sub` in its built-in `basic` client scope, a realm import
+            // that names clientScopes replaces the built-in set, and the resulting tokens had no
+            // subject. They authenticated. They authorised correctly. And every admin_audit_event
+            // they produced recorded who acted and not what they acted with. No test could see it,
+            // because every token in the suite is built with an explicit subject.
+            //
+            // WARN rather than a refusal: the request is properly authenticated and the platform
+            // has no standing to reject a token an issuer signed over a claim OIDC mandates for
+            // ID tokens and merely expects on access tokens. Refusing is on ROADMAP as a decision
+            // to take deliberately rather than one to discover here.
+            log.warn("authenticated caller has no principal name, so admin_audit_event.client_id "
+                    + "will be null for this request. A bearer token with no `sub` claim is the "
+                    + "usual cause — see OPERATIONS.md 2.4");
         }
         // Read through Actor so the same bounding and control-character stripping applies here as
         // on the path that writes it to the ledger. A header with a newline in it would otherwise

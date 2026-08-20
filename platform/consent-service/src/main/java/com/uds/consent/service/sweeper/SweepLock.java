@@ -1,14 +1,18 @@
 package com.uds.consent.service.sweeper;
 
+import com.uds.consent.ledger.store.SweepRunStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 
 /**
  * Runs a sweep on one instance at a time.
@@ -36,6 +40,16 @@ import java.sql.SQLException;
  * <p>A sweep that cannot take the lock does not queue and does not retry. It returns, and the next
  * tick tries again. These are periodic reconciliations rather than tasks: skipping one because
  * another instance is already doing it is the correct outcome, not a deferral.
+ *
+ * <p><strong>Every sweep that runs here is recorded in {@code sweep_run}.</strong> That is one
+ * change covering all eight jobs, and a ninth the day somebody writes it — which is the reason it
+ * lives here rather than in each sweeper. Until it did, a silently dead sweeper was invisible: it
+ * writes nothing, fails nothing and alerts nothing, and the evidence plane goes quietly incomplete
+ * while every decision stays correct.
+ *
+ * <p>The record is written by whichever instance won the lock, into the database all three share.
+ * Holding it in memory would have read "never ran" on the two that skipped, permanently. See
+ * {@link SweepRunStore}.
  */
 @Component
 public class SweepLock {
@@ -52,9 +66,12 @@ public class SweepLock {
     private static final int NAMESPACE = 0x554453; // 'UDS'
 
     private final DataSource dataSource;
+    private final SweepRunStore runs;
+    private final String instance = hostname();
 
-    public SweepLock(DataSource dataSource) {
+    public SweepLock(DataSource dataSource, SweepRunStore runs) {
         this.dataSource = dataSource;
+        this.runs = runs;
     }
 
     /**
@@ -69,10 +86,18 @@ public class SweepLock {
                 log.debug("{} sweep skipped: another instance holds the lock", name);
                 return false;
             }
+            record(() -> runs.started(name, instance, Instant.now()), name);
+            boolean ok = false;
             try {
                 sweep.run();
+                ok = true;
                 return true;
             } finally {
+                // Before the unlock, so a sweep that threw is still recorded as having run and
+                // failed. A FAILED row is a different fault from a missing one: one says the job
+                // is scheduled and broken, the other says nothing is scheduling it at all.
+                boolean outcome = ok;
+                record(() -> runs.finished(name, Instant.now(), outcome), name);
                 // In a finally block rather than after the call: an unlock that only runs on the
                 // happy path stops running the first time a sweep throws, and closing the
                 // connection would return it to the pool still holding the lock.
@@ -84,6 +109,33 @@ public class SweepLock {
             // says nothing the next tick will not say better.
             log.error("could not acquire the {} sweep lock: {}", name, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Runs a bookkeeping write, swallowing any failure.
+     *
+     * <p>Deliberately not allowed to propagate. This table is telemetry about the sweep, not the
+     * sweep's own work, and letting a failed write abort a retention pass or an integrity sweep
+     * would trade the thing that matters for the thing that describes it. Copied from
+     * {@code EnforcementRecorder}'s posture on failed evidence writes, and visible the same way:
+     * at WARN, and as a stale age on the gauge, which is what the alert is watching anyway.
+     */
+    private void record(Runnable write, String name) {
+        try {
+            write.run();
+        } catch (RuntimeException e) {
+            log.warn("could not record the {} sweep run: {}", name, e.getMessage());
+        }
+    }
+
+    private static String hostname() {
+        try {
+            return InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException e) {
+            // Not worth failing over. The column answers "which replica is wedged", and an
+            // unknown answer there is better than a sweeper that will not start.
+            return "unknown";
         }
     }
 

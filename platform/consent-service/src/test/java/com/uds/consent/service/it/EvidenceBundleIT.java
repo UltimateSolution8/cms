@@ -8,6 +8,7 @@ import com.uds.consent.core.model.SuppressionScope;
 import com.uds.consent.core.model.SuppressionSource;
 import com.uds.consent.ledger.store.AdminAuditStore;
 import com.uds.consent.ledger.store.PropagationTargetStore;
+import com.uds.consent.ledger.store.PropagationSystemStore;
 import com.uds.consent.ledger.store.WebhookStore;
 import com.uds.consent.ledger.store.ReconfirmationStore;
 import com.uds.consent.core.model.IdentifierType;
@@ -54,6 +55,9 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
     private static final String NOTICE = "NOTICE_DENAVE_B2B";
     private static final String PURPOSE = "MKT_OUTBOUND_CALL";
     private static final String TOPIC = "uds.consent.events";
+
+    @Autowired
+    private PropagationSystemStore propagationSystems;
 
     @Autowired
     private EvidenceBundleService bundles;
@@ -463,16 +467,19 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
             // this subject. Mandatory is false on both deliberately — a mandatory target with no
             // subscription is exactly what uds_consent_propagation_uncovered counts, and leaving
             // one behind would make this suite decide another suite's gauge.
+            declare(reached);
             propagationTargets.upsert(ENTITY, TOPIC, reached, false, true, "bundle fixture");
             // A URL unique to this test. webhook_subscription is unique on (entity_id, topic,
             // url) and the constraint does not exclude inactive rows, so a shared endpoint left
             // behind here is a duplicate-key failure inside whichever suite registers next — which
             // presents there as a fault in that suite and is completely opaque from inside it.
+            declare(subscription.toUpperCase(java.util.Locale.ROOT));
             webhooks.upsert(subscription, ENTITY, TOPIC, "http://127.0.0.1:1/" + subscription,
                     "eb-secret", true, "bundle fixture");
             webhooks.recordDelivery(subscription, ENTITY, subject, 1L, 1, "DELIVERED", 200, null,
                     Instant.now().truncatedTo(ChronoUnit.SECONDS));
 
+            declare(unreachable);
             propagationTargets.upsert(ENTITY, TOPIC, unreachable, false, true, "bundle fixture");
 
             List<EvidenceBundleService.PropagationRecord> propagation =
@@ -546,5 +553,17 @@ class EvidenceBundleIT extends PostgresIntegrationTest {
                 .withFailMessage("capture rejected: %s", result.violations())
                 .isTrue();
         return subject;
+    }
+
+    /**
+     * Declares a system code before it is used on either side of the propagation join.
+     *
+     * <p>{@code V33} put a foreign key on {@code propagation_system} from both
+     * {@code propagation_target} and {@code webhook_subscription}, so a code the entity has not
+     * declared is refused by the database rather than silently producing a daily gap row for a
+     * system that may be perfectly reachable. Fixtures declare theirs the way an operator would.
+     */
+    private void declare(String systemCode) {
+        propagationSystems.upsert(ENTITY, systemCode, "test fixture", true);
     }
 }

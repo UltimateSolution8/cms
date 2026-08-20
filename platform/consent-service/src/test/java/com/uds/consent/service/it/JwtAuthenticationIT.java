@@ -18,6 +18,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
@@ -67,6 +74,12 @@ class JwtAuthenticationIT extends PostgresIntegrationTest {
 
     @Autowired
     private TestRestTemplate rest;
+
+    @Autowired
+    private javax.sql.DataSource dataSource;
+
+    @Autowired
+    private org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
     @Autowired
     private AdminAuditStore audit;
@@ -205,9 +218,146 @@ class JwtAuthenticationIT extends PostgresIntegrationTest {
                 new HttpEntity<>(headers), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.OK);
 
-        assertThat(rest.exchange("/v1/admin/ropa/MATRIX_IN", HttpMethod.GET,
+        assertThat(rest.exchange("/v1/admin/ropa/MATRIX", HttpMethod.GET,
                 new HttpEntity<>(headers), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    @DisplayName("granted values are unioned across the claim names, not taken from the first")
+    void theGrantedValuesAreUnionedAcrossClaims() {
+        // The shape Entra actually issues, and the reason "first non-empty claim wins" was
+        // rejected. A delegated token routinely carries scp with the OIDC scopes — none of which
+        // this platform maps — beside roles with the app role that is the actual grant. Reading
+        // only the first non-empty claim finds scp, maps nothing, and refuses a token carrying a
+        // valid grant while naming the wrong claim in the diagnostic.
+        //
+        // Asserted as OK rather than as "scopes were parsed": the property is that the grant is
+        // honoured, not that a particular claim was read.
+        ResponseEntity<String> response = rest.exchange("/v1/evaluate", HttpMethod.POST,
+                new HttpEntity<>(decisionRequest(), bearer(token(claims -> claims
+                        .subject("entra-delegated-user")
+                        .claim("scp", "openid profile email")
+                        .claim("roles", List.of("consent.decision"))
+                        .claim("entity_id", "DENAVE_IN")))),
+                String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    @DisplayName("an app role names the entity where the issuer cannot mint a custom claim")
+    void anAppRoleCarriesTheEntity() {
+        // Entra will not put entity_id into an access token for a custom API without a
+        // claims-mapping policy and a custom signing key. An app role needs neither and is
+        // assigned to people rather than to applications, so entity.DENAVE_IN carries the same
+        // fact through a mechanism the issuer actually has.
+        HttpHeaders headers = bearer(token(claims -> claims
+                .subject("entra-denave-admin")
+                .claim("preferred_username", "denave.admin@uds.example")
+                .claim("roles", List.of("consent.admin", "entity.DENAVE_IN"))));
+
+        assertThat(rest.exchange("/v1/admin/ropa/DENAVE_IN", HttpMethod.GET,
+                new HttpEntity<>(headers), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        // The half that matters. Without the app-role resolution this token has no entity at all,
+        // which the platform reads as GROUP LEVEL — so this call would return 200 and the caller
+        // would be reading another fiduciary's processing register.
+        assertThat(rest.exchange("/v1/admin/ropa/MATRIX", HttpMethod.GET,
+                new HttpEntity<>(headers), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    @DisplayName("a token naming two entities is refused rather than resolved to one of them")
+    void twoEntityRolesAreRefused() {
+        // Never first-wins. A set's iteration order would otherwise decide which fiduciary's
+        // records a caller reads, and both isolation layers would agree on the wrong answer —
+        // which is exactly the failure rules §2 exists to make unrepresentable.
+        ResponseEntity<String> response = rest.exchange("/v1/admin/ropa/DENAVE_IN", HttpMethod.GET,
+                new HttpEntity<>(bearer(token(claims -> claims
+                        .subject("over-assigned-user")
+                        .claim("roles", List.of("consent.admin",
+                                "entity.DENAVE_IN", "entity.MATRIX"))))),
+                String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        // The body distinguishes it from an ordinary cross-entity refusal, because the two send an
+        // operator to different places: one is a caller reaching outside its scope, this one is an
+        // issuer that assigned two roles it should not have.
+        assertThat(response.getBody()).contains("Ambiguous entity scope");
+    }
+
+    @Test
+    @DisplayName("the dedicated claim wins where a token carries both")
+    void theDedicatedClaimWinsOverAnAppRole() {
+        // Keycloak can mint entity_id directly and Entra cannot, so a token may carry either. Where
+        // both are present the explicit claim is authoritative — the role prefix is the fallback,
+        // not a second source of truth competing with it.
+        HttpHeaders headers = bearer(token(claims -> claims
+                .subject("both-sources-user")
+                .claim("scope", "consent.admin")
+                .claim("entity_id", "DENAVE_IN")
+                .claim("roles", List.of("entity.MATRIX"))));
+
+        assertThat(rest.exchange("/v1/admin/ropa/DENAVE_IN", HttpMethod.GET,
+                new HttpEntity<>(headers), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    @DisplayName("the entity a token resolves to reaches the database session, not only the guard")
+    void theResolvedEntityReachesTheDatabaseSession() throws Exception {
+        // The assertion the plan named twice, and the one an HTTP status cannot make. A 403 on
+        // another entity is produced by layer ONE alone; a 200 on the right entity is
+        // indistinguishable between "layer two received DENAVE_IN" and "layer two received nothing
+        // and passed everything" — which is exactly the shape of the Phase 11 defect, where both
+        // layers agreed and both were wrong.
+        //
+        // So this reads the session variable the RLS policy actually consults, on a connection
+        // taken from the same @Primary EntityScopedDataSource every store uses.
+        assertThat(entityOnTheSession(token(claims -> claims
+                .subject("session-claim-user")
+                .claim("scope", "consent.admin")
+                .claim("entity_id", "DENAVE_IN"))))
+                .isEqualTo("DENAVE_IN");
+
+        // And via the app role, which is the path an Entra token takes.
+        assertThat(entityOnTheSession(token(claims -> claims
+                .subject("session-role-user")
+                .claim("roles", List.of("consent.admin", "entity.MATRIX")))))
+                .isEqualTo("MATRIX");
+
+        // A token with neither is group level, and the session variable is empty rather than
+        // stale — V13 reads an empty string as NULL, which its policy passes deliberately. Pinned
+        // because a leaked previous value here would scope one caller to another's entity.
+        assertThat(entityOnTheSession(token(claims -> claims
+                .subject("group-level-user")
+                .claim("scope", "consent.admin"))))
+                .isEmpty();
+    }
+
+    /**
+     * The value {@code uds_entity_claim()} would see, for a request authenticated by this token.
+     *
+     * <p>Sets the security context by hand rather than going over HTTP, because the assertion is
+     * about what {@code EntityScopedDataSource} pushes onto the connection — which is not
+     * observable from a response body at all.
+     */
+    private String entityOnTheSession(String jwtToken) throws Exception {
+        Jwt decoded = jwtDecoder.decode(jwtToken);
+        SecurityContextHolder.getContext().setAuthentication(
+                new JwtAuthenticationToken(decoded, List.of(), decoded.getSubject()));
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "select coalesce(current_setting('uds.entity_id', true), '')")) {
+            ResultSet rows = statement.executeQuery();
+            assertThat(rows.next()).isTrue();
+            return rows.getString(1);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     // ---------------------------------------------------------------------------------------
