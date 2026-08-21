@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Evidence Bundle - UDS Compliance Console</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@450&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "background": "#fcf8ff",
+                      "on-secondary-fixed-variant": "#3c475a",
+                      "secondary-fixed-dim": "#bcc7de",
+                      "surface-container-lowest": "#ffffff",
+                      "on-primary-fixed": "#0f0069",
+                      "tertiary": "#511c00",
+                      "on-surface": "#1b1b22",
+                      "surface-tint": "#544fc0",
+                      "primary": "#1f108e",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "on-tertiary-fixed": "#351000",
+                      "secondary-container": "#d5e0f8",
+                      "on-tertiary-container": "#fe9562",
+                      "inverse-on-surface": "#f3eff9",
+                      "surface-container-high": "#eae6f1",
+                      "surface": "#fcf8ff",
+                      "tertiary-fixed-dim": "#ffb694",
+                      "surface-dim": "#dcd8e3",
+                      "on-secondary": "#ffffff",
+                      "on-error-container": "#93000a",
+                      "outline-variant": "#c8c4d5",
+                      "tertiary-container": "#752c00",
+                      "on-secondary-fixed": "#111c2d",
+                      "inverse-surface": "#303037",
+                      "on-primary-fixed-variant": "#3b35a7",
+                      "secondary": "#545f73",
+                      "on-surface-variant": "#464553",
+                      "on-error": "#ffffff",
+                      "surface-variant": "#e4e1eb",
+                      "on-tertiary-fixed-variant": "#7a3003",
+                      "outline": "#777584",
+                      "primary-container": "#3730a3",
+                      "on-secondary-container": "#586377",
+                      "on-primary": "#ffffff",
+                      "surface-container-highest": "#e4e1eb",
+                      "error-container": "#ffdad6",
+                      "secondary-fixed": "#d8e3fb",
+                      "inverse-primary": "#c3c0ff",
+                      "tertiary-fixed": "#ffdbcc",
+                      "on-tertiary": "#ffffff",
+                      "primary-fixed": "#e2dfff",
+                      "error": "#ba1a1a",
+                      "surface-container": "#f0ecf6",
+                      "on-background": "#1b1b22",
+                      "surface-bright": "#fcf8ff",
+                      "surface-container-low": "#f6f2fc",
+                      "on-primary-container": "#a9a7ff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "table-row-height": "44px",
+                      "container-margin": "32px",
+                      "gutter": "16px",
+                      "unit": "4px",
+                      "sidebar-width": "260px"
+              },
+              "fontFamily": {
+                      "body-sm": ["Inter"],
+                      "section-header": ["Inter"],
+                      "body-md": ["Inter"],
+                      "label-caps": ["Inter"],
+                      "page-title": ["Inter"],
+                      "data-mono": ["JetBrains Mono"]
+              },
+              "fontSize": {
+                      "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                      "section-header": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                      "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                      "page-title": ["30px", {"lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                      "data-mono": ["13px", {"lineHeight": "16px", "fontWeight": "450"}]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[data-weight="fill"] {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md min-h-screen">
+<!-- TopAppBar -->
+<header class="bg-surface-bright text-primary font-section-header border-b border-outline-variant fixed top-0 right-0 left-sidebar-width z-30 flex justify-between items-center px-gutter h-table-row-height">
+<div class="flex items-center gap-4">
+<span class="font-section-header text-section-header font-bold text-primary">Matrix Business Services</span>
+<div class="relative ml-8">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm" data-icon="search">search</span>
+<input class="pl-8 pr-4 py-1 bg-surface-container-low border border-outline-variant rounded text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary w-64 placeholder-on-surface-variant text-on-surface" placeholder="Global Entity Search..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<span class="font-label-caps text-label-caps text-on-surface-variant mr-4 border-r border-outline-variant pr-4">Fiduciary: Matrix Ltd. | EU - GDPR</span>
+<button aria-label="Notifications" class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-surface-container-high">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button aria-label="Profile" class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-surface-container-high">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+<img alt="Actor ID: 4921-X" class="w-8 h-8 rounded-full border border-outline-variant object-cover ml-2" data-alt="A small, professional avatar portrait of a business executive in a modern light-mode setting. The image is a tight crop of the person's face, well-lit with a crisp white background to match the high-stakes corporate compliance UI." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBhHYDlBHI1Ug6nlnlvGNxo6MKLE4wQV6q3DjsD1nOArLxQdWRxtyBzz3PO7dB5axGzGYLHrkC7sdLx5bL5ru_uVbdsmZQviU2AsPLB_7agl5Y2klkwRCbS2GFk81VOXzk6cczCic3hALMukb173Nt-UgR7m98B_b_A0pKnGvztrx4wNNLn-4q7uj24GhZX97H3YCUrcnIeRvYJnv6-JNgxF5bn7gfbSjegVmK-5RtNDrf1GVzuZjaUyg"/>
+</div>
+</header>
+<!-- SideNavBar -->
+<nav class="bg-surface text-primary font-body-md fixed left-0 top-0 bottom-0 z-40 flex flex-col border-r border-outline-variant w-sidebar-width h-full">
+<div class="p-4 border-b border-outline-variant mb-4 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold font-section-header text-section-header">U</div>
+<div>
+<h1 class="font-page-title text-page-title text-primary text-xl leading-tight">UDS Compliance</h1>
+<p class="font-label-caps text-label-caps text-on-surface-variant">Regulatory Console</p>
+</div>
+</div>
+<ul class="flex flex-col gap-1 px-2 flex-grow overflow-y-auto">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span>Global Overview</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="corporate_fare">corporate_fare</span>
+<span>Fiduciary Entities</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="rule">rule</span>
+<span>Rights Queue</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded bg-secondary-container text-on-secondary-container font-bold opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="inventory_2" data-weight="fill">inventory_2</span>
+<span>Evidence Bundle</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="history_edu">history_edu</span>
+<span>Registries</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="shield_check">format_image_left</span>
+<span>Integrity Sweeps</span>
+</a>
+</li>
+<li class="mt-auto pb-4">
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-high transition-colors border-t border-outline-variant pt-4 mt-2" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>System Settings</span>
+</a>
+</li>
+</ul>
+</nav>
+<!-- Main Content -->
+<main class="ml-sidebar-width mt-[44px] p-container-margin min-h-[calc(100vh-44px)] flex justify-center">
+<div class="w-full max-w-7xl grid grid-cols-12 gap-gutter">
+<!-- Search & Filter Card (Bento Style) -->
+<div class="col-span-12 lg:col-span-7 xl:col-span-8 flex flex-col gap-gutter">
+<div class="bg-surface-container-lowest border-t-2 border-primary border-x border-b border-outline-variant rounded-lg p-6 shadow-sm flex flex-col gap-6 relative overflow-hidden">
+<!-- Subtle background decoration -->
+<div class="absolute -right-20 -top-20 w-64 h-64 bg-primary-container opacity-10 rounded-full blur-3xl pointer-events-none"></div>
+<div>
+<h2 class="font-page-title text-page-title text-on-surface mb-1">Evidence Bundle Retrieval</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Locate and compile compliance records across all fiduciary scopes.</p>
+</div>
+<form class="flex flex-col gap-5 z-10 relative">
+<div>
+<label class="block font-label-caps text-label-caps text-on-surface mb-2" for="subject-identifier">Subject Identifier (Email / Phone / Hash)</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="fingerprint">fingerprint</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant rounded text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all placeholder-on-surface-variant text-on-surface" id="subject-identifier" placeholder="Enter exact match or SHA-256 hash..." type="text"/>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div>
+<label class="block font-label-caps text-label-caps text-on-surface mb-2" for="fiduciary-entity">Fiduciary Entity Scope</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="domain">domain</span>
+<select class="w-full pl-10 pr-8 py-2 bg-surface-container border border-outline-variant rounded text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none appearance-none cursor-pointer text-on-surface" id="fiduciary-entity">
+<option value="all">All Entities (Global Admin)</option>
+<option selected="" value="matrix_ltd">Matrix Ltd. (EU)</option>
+<option value="matrix_us">Matrix Corp (US)</option>
+</select>
+<span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none" data-icon="arrow_drop_down">arrow_drop_down</span>
+</div>
+</div>
+<div>
+<label class="block font-label-caps text-label-caps text-on-surface mb-2" for="date-range">Interaction Date Range</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="calendar_month">calendar_month</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant rounded text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none text-on-surface" id="date-range" placeholder="Last 90 Days" type="text"/>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-between pt-2">
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="rounded border-outline-variant text-primary focus:ring-primary bg-surface-container h-4 w-4" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Include archived cryptographic hashes</span>
+</label>
+<button class="bg-primary text-on-primary px-6 py-2 rounded font-label-caps text-label-caps hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center gap-2" type="button">
+<span class="material-symbols-outlined text-sm" data-icon="search">search</span>
+                                Initiate Search
+                            </button>
+</div>
+</form>
+</div>
+<!-- Status Summary Cards -->
+<div class="grid grid-cols-3 gap-gutter">
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col items-center justify-center text-center">
+<span class="material-symbols-outlined text-primary mb-2" data-icon="inventory_2" data-weight="fill">inventory_2</span>
+<span class="font-section-header text-section-header text-on-surface">1,492</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Bundles Compiled Today</span>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col items-center justify-center text-center">
+<span class="material-symbols-outlined text-tertiary-container mb-2" data-icon="shield_person" data-weight="fill">shield_person</span>
+<span class="font-section-header text-section-header text-on-surface">12</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Active DSRs Pending</span>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col items-center justify-center text-center">
+<span class="material-symbols-outlined text-secondary mb-2" data-icon="verified_user" data-weight="fill">verified_user</span>
+<span class="font-section-header text-section-header text-on-surface">99.8%</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Integrity Pass Rate</span>
+</div>
+</div>
+</div>
+<!-- Recent Activity / History Panel -->
+<div class="col-span-12 lg:col-span-5 xl:col-span-4 flex flex-col">
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg flex flex-col h-full overflow-hidden">
+<div class="p-4 border-b border-outline-variant bg-surface-container-low flex justify-between items-center sticky top-0">
+<h3 class="font-section-header text-section-header text-on-surface">Recently Accessed Bundles</h3>
+<button class="text-primary hover:text-primary-container font-label-caps text-label-caps uppercase transition-colors">View All</button>
+</div>
+<div class="flex-grow overflow-y-auto">
+<ul class="flex flex-col">
+<!-- Item 1 -->
+<li class="border-b border-outline-variant p-4 hover:bg-surface-container-low transition-colors cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm bg-primary-container text-on-primary-container rounded p-1" data-icon="folder_managed">folder_managed</span>
+<span class="font-body-md text-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">BNDL-8492-EU</span>
+</div>
+<span class="bg-secondary-container text-on-secondary-container font-label-caps text-[10px] px-2 py-0.5 rounded border border-secondary/20 flex items-center gap-1">
+<span class="material-symbols-outlined text-[10px]" data-icon="check_circle">check_circle</span> Verified Chain
+                                    </span>
+</div>
+<div class="font-data-mono text-data-mono text-on-surface-variant text-xs mb-1">Subj: a9f4b2...8e1c</div>
+<div class="flex justify-between items-center font-label-caps text-label-caps text-on-surface-variant text-[10px]">
+<span>Matrix Ltd. (GDPR)</span>
+<span>2 mins ago</span>
+</div>
+</li>
+<!-- Item 2 -->
+<li class="border-b border-outline-variant p-4 hover:bg-surface-container-low transition-colors cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm bg-primary-container text-on-primary-container rounded p-1" data-icon="folder_managed">folder_managed</span>
+<span class="font-body-md text-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">BNDL-8491-US</span>
+</div>
+<span class="bg-tertiary-container text-on-tertiary-container font-label-caps text-[10px] px-2 py-0.5 rounded border border-tertiary/20 flex items-center gap-1">
+<span class="material-symbols-outlined text-[10px]" data-icon="pending">pending</span> Integrity Check Pending
+                                    </span>
+</div>
+<div class="font-data-mono text-data-mono text-on-surface-variant text-xs mb-1">Subj: user@example.com</div>
+<div class="flex justify-between items-center font-label-caps text-label-caps text-on-surface-variant text-[10px]">
+<span>Matrix Corp (CCPA)</span>
+<span>15 mins ago</span>
+</div>
+</li>
+<!-- Item 3 -->
+<li class="border-b border-outline-variant p-4 hover:bg-surface-container-low transition-colors cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm bg-primary-container text-on-primary-container rounded p-1" data-icon="folder_managed">folder_managed</span>
+<span class="font-body-md text-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">BNDL-8488-EU</span>
+</div>
+<span class="bg-secondary-container text-on-secondary-container font-label-caps text-[10px] px-2 py-0.5 rounded border border-secondary/20 flex items-center gap-1">
+<span class="material-symbols-outlined text-[10px]" data-icon="check_circle">check_circle</span> Verified Chain
+                                    </span>
+</div>
+<div class="font-data-mono text-data-mono text-on-surface-variant text-xs mb-1">Subj: +15550192384</div>
+<div class="flex justify-between items-center font-label-caps text-label-caps text-on-surface-variant text-[10px]">
+<span>Matrix Ltd. (GDPR)</span>
+<span>1 hour ago</span>
+</div>
+</li>
+<!-- Item 4 -->
+<li class="p-4 hover:bg-surface-container-low transition-colors cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm bg-primary-container text-on-primary-container rounded p-1" data-icon="folder_managed">folder_managed</span>
+<span class="font-body-md text-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">BNDL-8485-GLOBAL</span>
+</div>
+<span class="bg-error-container text-on-error-container font-label-caps text-[10px] px-2 py-0.5 rounded border border-error/20 flex items-center gap-1">
+<span class="material-symbols-outlined text-[10px]" data-icon="error">error</span> Sync Failed
+                                    </span>
+</div>
+<div class="font-data-mono text-data-mono text-on-surface-variant text-xs mb-1">Subj: 7c3a1b...99f0</div>
+<div class="flex justify-between items-center font-label-caps text-label-caps text-on-surface-variant text-[10px]">
+<span>Cross-Border Admin</span>
+<span>3 hours ago</span>
+</div>
+</li>
+</ul>
+</div>
+<div class="p-3 bg-surface-container border-t border-outline-variant text-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant text-xs flex justify-center items-center gap-1"><span class="material-symbols-outlined text-[14px]" data-icon="lock">lock</span> Audit logs updated securely.</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

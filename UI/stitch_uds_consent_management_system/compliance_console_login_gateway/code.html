@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>UDS Compliance Console - Login</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400;450&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "background": "#fcf8ff",
+                      "on-secondary-fixed-variant": "#3c475a",
+                      "secondary-fixed-dim": "#bcc7de",
+                      "surface-container-lowest": "#ffffff",
+                      "on-primary-fixed": "#0f0069",
+                      "tertiary": "#511c00",
+                      "on-surface": "#1b1b22",
+                      "surface-tint": "#544fc0",
+                      "primary": "#1f108e",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "on-tertiary-fixed": "#351000",
+                      "secondary-container": "#d5e0f8",
+                      "on-tertiary-container": "#fe9562",
+                      "inverse-on-surface": "#f3eff9",
+                      "surface-container-high": "#eae6f1",
+                      "surface": "#fcf8ff",
+                      "tertiary-fixed-dim": "#ffb694",
+                      "surface-dim": "#dcd8e3",
+                      "on-secondary": "#ffffff",
+                      "on-error-container": "#93000a",
+                      "outline-variant": "#c8c4d5",
+                      "tertiary-container": "#752c00",
+                      "on-secondary-fixed": "#111c2d",
+                      "inverse-surface": "#303037",
+                      "on-primary-fixed-variant": "#3b35a7",
+                      "secondary": "#545f73",
+                      "on-surface-variant": "#464553",
+                      "on-error": "#ffffff",
+                      "surface-variant": "#e4e1eb",
+                      "on-tertiary-fixed-variant": "#7a3003",
+                      "outline": "#777584",
+                      "primary-container": "#3730a3",
+                      "on-secondary-container": "#586377",
+                      "on-primary": "#ffffff",
+                      "surface-container-highest": "#e4e1eb",
+                      "error-container": "#ffdad6",
+                      "secondary-fixed": "#d8e3fb",
+                      "inverse-primary": "#c3c0ff",
+                      "tertiary-fixed": "#ffdbcc",
+                      "on-tertiary": "#ffffff",
+                      "primary-fixed": "#e2dfff",
+                      "error": "#ba1a1a",
+                      "surface-container": "#f0ecf6",
+                      "on-background": "#1b1b22",
+                      "surface-bright": "#fcf8ff",
+                      "surface-container-low": "#f6f2fc",
+                      "on-primary-container": "#a9a7ff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "table-row-height": "44px",
+                      "container-margin": "32px",
+                      "gutter": "16px",
+                      "unit": "4px",
+                      "sidebar-width": "260px"
+              },
+              "fontFamily": {
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "section-header": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "page-title": [
+                              "Inter"
+                      ],
+                      "data-mono": [
+                              "JetBrains Mono"
+                      ]
+              },
+              "fontSize": {
+                      "body-sm": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "section-header": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-caps": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "page-title": [
+                              "30px",
+                              {
+                                      "lineHeight": "38px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "data-mono": [
+                              "13px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "450"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+          .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+          }
+      </style>
+</head>
+<body class="bg-surface-container-low min-h-screen flex items-center justify-center font-body-md text-body-md text-on-surface antialiased p-container-margin">
+<main class="w-full max-w-md mx-auto">
+<!-- Login Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-8 flex flex-col gap-6 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1)] relative overflow-hidden">
+<!-- Top focus border -->
+<div class="absolute top-0 left-0 w-full h-[2px] bg-primary"></div>
+<!-- Branding Header -->
+<div class="flex flex-col items-center text-center gap-2 mb-4">
+<div class="w-12 h-12 bg-surface-container-highest rounded-lg flex items-center justify-center mb-2 border border-outline-variant">
+<span class="material-symbols-outlined text-primary text-3xl" style="font-variation-settings: 'FILL' 1;">shield_locked</span>
+</div>
+<h1 class="font-section-header text-section-header text-on-surface">UDS Compliance Console</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Matrix Business Services | Fiduciary Gateway</p>
+</div>
+<!-- Form Area (Empty, implies SSO focus) -->
+<form class="flex flex-col gap-4">
+<!-- SSO Action -->
+<button class="w-full bg-primary hover:bg-primary-container text-on-primary font-label-caps text-label-caps py-3 px-4 rounded transition-colors duration-150 flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2" type="button">
+<span class="material-symbols-outlined text-lg">corporate_fare</span>
+                    Sign in with Corporate SSO (OIDC)
+                </button>
+<div class="relative flex py-4 items-center">
+<div class="flex-grow border-t border-outline-variant"></div>
+<span class="flex-shrink-0 mx-4 text-on-surface-variant font-label-caps text-label-caps">OR</span>
+<div class="flex-grow border-t border-outline-variant"></div>
+</div>
+<!-- Secondary Actions (e.g., Support/Emergency) -->
+<button class="w-full bg-surface-container-highest hover:bg-surface-variant text-on-surface font-label-caps text-label-caps py-3 px-4 border border-outline-variant rounded transition-colors duration-150 flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-outline focus:ring-offset-2" type="button">
+<span class="material-symbols-outlined text-lg">admin_panel_settings</span>
+                    Emergency Break-Glass Login
+                </button>
+</form>
+<!-- Security Footer -->
+<div class="mt-6 pt-6 border-t border-outline-variant text-center flex flex-col gap-2">
+<div class="flex items-center justify-center gap-1 text-primary">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">verified</span>
+<span class="font-data-mono text-data-mono">SECURE CONNECTION</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
+                    Unauthorized access to the UDS Evidence Plane is strictly prohibited and audited. Protected by PKCE &amp; Ed25519 Signed Snapshots.
+                </p>
+<div class="mt-2 text-on-surface-variant opacity-70">
+<span class="font-data-mono text-data-mono text-[10px]">NODE: UDS-SEC-9X.24 // SESSION: <span class="text-primary-container">IDLE</span></span>
+</div>
+</div>
+</div>
+</main>
+</body></html>

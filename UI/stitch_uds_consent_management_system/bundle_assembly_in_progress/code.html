@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Integrity Sweep - UDS Compliance Console</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@450&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "background": "#fcf8ff",
+                        "on-secondary-fixed-variant": "#3c475a",
+                        "secondary-fixed-dim": "#bcc7de",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#0f0069",
+                        "tertiary": "#511c00",
+                        "on-surface": "#1b1b22",
+                        "surface-tint": "#544fc0",
+                        "primary": "#1f108e",
+                        "primary-fixed-dim": "#c3c0ff",
+                        "on-tertiary-fixed": "#351000",
+                        "secondary-container": "#d5e0f8",
+                        "on-tertiary-container": "#fe9562",
+                        "inverse-on-surface": "#f3eff9",
+                        "surface-container-high": "#eae6f1",
+                        "surface": "#fcf8ff",
+                        "tertiary-fixed-dim": "#ffb694",
+                        "surface-dim": "#dcd8e3",
+                        "on-secondary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#c8c4d5",
+                        "tertiary-container": "#752c00",
+                        "on-secondary-fixed": "#111c2d",
+                        "inverse-surface": "#303037",
+                        "on-primary-fixed-variant": "#3b35a7",
+                        "secondary": "#545f73",
+                        "on-surface-variant": "#464553",
+                        "on-error": "#ffffff",
+                        "surface-variant": "#e4e1eb",
+                        "on-tertiary-fixed-variant": "#7a3003",
+                        "outline": "#777584",
+                        "primary-container": "#3730a3",
+                        "on-secondary-container": "#586377",
+                        "on-primary": "#ffffff",
+                        "surface-container-highest": "#e4e1eb",
+                        "error-container": "#ffdad6",
+                        "secondary-fixed": "#d8e3fb",
+                        "inverse-primary": "#c3c0ff",
+                        "tertiary-fixed": "#ffdbcc",
+                        "on-tertiary": "#ffffff",
+                        "primary-fixed": "#e2dfff",
+                        "error": "#ba1a1a",
+                        "surface-container": "#f0ecf6",
+                        "on-background": "#1b1b22",
+                        "surface-bright": "#fcf8ff",
+                        "surface-container-low": "#f6f2fc",
+                        "on-primary-container": "#a9a7ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "table-row-height": "44px",
+                        "container-margin": "32px",
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "sidebar-width": "260px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Inter"],
+                        "section-header": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "page-title": ["Inter"],
+                        "data-mono": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "section-header": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "page-title": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "data-mono": ["13px", { "lineHeight": "16px", "fontWeight": "450" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .spin-slow { animation: spin 3s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .pulse-slow { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen overflow-hidden antialiased">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 bottom-0 z-40 flex flex-col bg-surface border-r border-outline-variant w-sidebar-width h-full flat no shadows">
+<div class="p-container-margin flex flex-col gap-gutter border-b border-outline-variant">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="policy">policy</span>
+</div>
+<div>
+<h1 class="font-page-title text-[20px] leading-tight text-primary font-bold">UDS Compliance</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Regulatory Console</p>
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto py-container-margin px-gutter flex flex-col gap-unit">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="font-body-md text-body-md">Global Overview</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="corporate_fare">corporate_fare</span>
+<span class="font-body-md text-body-md">Fiduciary Entities</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="rule">rule</span>
+<span class="font-body-md text-body-md">Rights Queue</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="inventory_2">inventory_2</span>
+<span class="font-body-md text-body-md">Evidence Bundle</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="history_edu">history_edu</span>
+<span class="font-body-md text-body-md">Registries</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-secondary-container text-on-secondary-container font-bold opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="shield_check">format_image_left</span>
+<span class="font-body-md text-body-md">Integrity Sweeps</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant mt-auto" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-body-md text-body-md">System Settings</span>
+</a>
+</div>
+</nav>
+<!-- TopAppBar -->
+<header class="fixed top-0 right-0 left-sidebar-width z-30 flex justify-between items-center px-gutter h-table-row-height bg-surface-bright border-b border-outline-variant flat no shadows">
+<div class="flex items-center gap-4 w-1/3">
+<span class="font-section-header text-section-header font-bold text-primary">Matrix Business Services</span>
+<div class="relative w-full max-w-xs">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="search">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-DEFAULT pl-8 pr-3 py-1 text-body-sm font-body-sm text-on-surface placeholder:text-on-surface-variant focus:ring-1 focus:ring-primary h-8" placeholder="Search entity or hash..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center p-1 rounded-DEFAULT hover:bg-surface-container-highest">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center p-1 rounded-DEFAULT hover:bg-surface-container-highest">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center text-xs font-bold font-body-sm cursor-pointer ml-2" title="Actor ID: 4921-X">
+                UP
+            </div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-sidebar-width mt-table-row-height p-container-margin min-h-[calc(100vh-44px)] flex items-center justify-center bg-gradient-to-br from-background to-surface-container-low relative">
+<!-- Fiduciary Scope Indicator (Fixed Bottom Right) -->
+<div class="fixed bottom-container-margin right-container-margin bg-surface-container-lowest border border-outline-variant rounded-lg p-3 flex items-center gap-3 shadow-sm z-20">
+<div class="flex flex-col">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Active Scope</span>
+<span class="font-body-md text-body-md font-semibold text-primary">Matrix Ltd. | EU-GDPR</span>
+</div>
+<span class="material-symbols-outlined text-primary" data-icon="verified_user">verified_user</span>
+</div>
+<!-- Processing Center -->
+<div class="w-full max-w-2xl bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-12 flex flex-col items-center justify-center relative overflow-hidden z-10 border-t-2 border-t-primary">
+<!-- Subtle Background Pattern/Glow -->
+<div class="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary-fixed-dim/20 to-transparent pointer-events-none"></div>
+<!-- Loader Ring -->
+<div class="relative w-32 h-32 mb-8">
+<svg class="w-full h-full spin-slow text-primary-container" fill="none" viewbox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+<circle cx="50" cy="50" r="46" stroke="currentColor" stroke-opacity="0.2" stroke-width="4"></circle>
+<path d="M50 4 A46 46 0 0 1 96 50" stroke="currentColor" stroke-linecap="round" stroke-width="4"></path>
+</svg>
+<!-- Inner Brand Mark -->
+<div class="absolute inset-0 flex items-center justify-center pulse-slow">
+<span class="material-symbols-outlined text-4xl text-primary" data-icon="lock_clock">lock_clock</span>
+</div>
+</div>
+<!-- Status Text -->
+<h2 class="font-section-header text-section-header text-on-surface text-center mb-2">Assembling Evidence Bundle: subject-001-walkthrough</h2>
+<!-- Monospace Sub-status -->
+<div class="flex items-center gap-2 mt-4 bg-surface-container py-2 px-4 rounded-lg border border-outline-variant/50">
+<span class="material-symbols-outlined text-sm text-secondary" data-icon="sync">sync</span>
+<p class="font-data-mono text-data-mono text-secondary">Verifying hash-chain integrity... (1,202 / 1,202 events checked)</p>
+</div>
+<!-- Fake Progress Bar -->
+<div class="w-full max-w-md bg-surface-container-highest rounded-full h-1.5 mt-8 overflow-hidden">
+<div class="bg-primary h-1.5 rounded-full w-[98%] transition-all duration-1000 ease-in-out relative">
+<div class="absolute inset-0 bg-white/30 pulse-slow w-full h-full rounded-full"></div>
+</div>
+</div>
+<!-- Trust Logic Branding -->
+<div class="mt-12 flex items-center gap-2 opacity-60">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="verified">verified</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant tracking-widest uppercase">Secured by Trust Logic</span>
+</div>
+</div>
+</main>
+<script>
+        // Simple script to update the fake progress visually
+        setTimeout(() => {
+            const monoText = document.querySelector('.font-data-mono');
+            if(monoText) monoText.innerHTML = 'Finalizing cryptographic signatures...';
+        }, 3000);
+    </script>
+</body></html>

@@ -1,0 +1,19 @@
+{
+  "name": "uds-consent-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:console": "npm run dev --workspace=@uds/compliance-console",
+    "dev:portal": "npm run dev --workspace=@uds/principal-portal",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

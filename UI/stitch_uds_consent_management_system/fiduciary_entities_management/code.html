@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>UDS Compliance - Fiduciary Entities</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@450&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-container-highest": "#e4e1eb",
+                      "on-error": "#ffffff",
+                      "primary-fixed": "#e2dfff",
+                      "on-tertiary-fixed-variant": "#7a3003",
+                      "on-background": "#1b1b22",
+                      "surface": "#fcf8ff",
+                      "on-secondary-fixed-variant": "#3c475a",
+                      "inverse-primary": "#c3c0ff",
+                      "surface-container-low": "#f6f2fc",
+                      "on-primary-fixed-variant": "#3b35a7",
+                      "on-error-container": "#93000a",
+                      "on-secondary": "#ffffff",
+                      "background": "#fcf8ff",
+                      "error": "#ba1a1a",
+                      "tertiary-container": "#752c00",
+                      "on-surface-variant": "#464553",
+                      "on-primary-fixed": "#0f0069",
+                      "outline": "#777584",
+                      "on-secondary-fixed": "#111c2d",
+                      "surface-container-lowest": "#ffffff",
+                      "primary": "#1f108e",
+                      "tertiary-fixed-dim": "#ffb694",
+                      "surface-variant": "#e4e1eb",
+                      "surface-container": "#f0ecf6",
+                      "on-primary-container": "#a9a7ff",
+                      "surface-container-high": "#eae6f1",
+                      "secondary": "#545f73",
+                      "on-tertiary-container": "#fe9562",
+                      "on-primary": "#ffffff",
+                      "on-tertiary": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "outline-variant": "#c8c4d5",
+                      "secondary-fixed": "#d8e3fb",
+                      "on-secondary-container": "#586377",
+                      "surface-bright": "#fcf8ff",
+                      "on-tertiary-fixed": "#351000",
+                      "on-surface": "#1b1b22",
+                      "tertiary-fixed": "#ffdbcc",
+                      "surface-tint": "#544fc0",
+                      "primary-container": "#3730a3",
+                      "surface-dim": "#dcd8e3",
+                      "tertiary": "#511c00",
+                      "secondary-fixed-dim": "#bcc7de",
+                      "inverse-surface": "#303037",
+                      "inverse-on-surface": "#f3eff9",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "secondary-container": "#d5e0f8"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "gutter": "16px",
+                      "unit": "4px",
+                      "table-row-height": "44px",
+                      "container-margin": "32px",
+                      "sidebar-width": "260px"
+              },
+              "fontFamily": {
+                      "data-mono": [
+                              "JetBrains Mono"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "section-header": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "page-title": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "data-mono": [
+                              "13px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "450"
+                              }
+                      ],
+                      "body-sm": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-caps": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "section-header": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "page-title": [
+                              "30px",
+                              {
+                                      "lineHeight": "38px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md antialiased overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- SideNavBar -->
+<nav class="bg-surface dark:bg-inverse-surface border-r border-outline-variant dark:border-outline docked left-0 h-full w-sidebar-width fixed top-0 bottom-0 z-40 flex flex-col">
+<div class="px-gutter py-6 flex flex-col gap-2">
+<div class="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container mb-2">
+<span class="material-symbols-outlined" data-weight="fill" style="font-variation-settings: 'FILL' 1;">admin_panel_settings</span>
+</div>
+<h1 class="font-page-title text-page-title text-primary dark:text-inverse-primary">UDS Compliance</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Regulatory Console</p>
+</div>
+<div class="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">dashboard</span>
+<span>Global Overview</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-secondary-container dark:bg-secondary text-on-secondary-container dark:text-on-secondary font-bold hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150 group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">corporate_fare</span>
+<span>Fiduciary Entities</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">rule</span>
+<span>Rights Queue</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">inventory_2</span>
+<span>Evidence Bundle</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">history_edu</span>
+<span>Registries</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">format_image_left</span>
+<span>Integrity Sweeps</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">settings</span>
+<span>System Settings</span>
+</a>
+</div>
+<div class="p-4 border-t border-outline-variant dark:border-outline">
+<div class="flex items-center gap-3 px-3 py-2 text-on-surface-variant">
+<span class="material-symbols-outlined">help</span>
+<span>Help &amp; Support</span>
+</div>
+</div>
+</nav>
+<!-- TopAppBar -->
+<header class="bg-surface-bright dark:bg-surface-dim border-b border-outline-variant dark:border-outline docked full-width top-0 fixed top-0 right-0 left-sidebar-width z-30 flex justify-between items-center px-gutter h-table-row-height h-16">
+<div class="flex items-center gap-4">
+<div class="font-section-header text-section-header font-bold text-primary dark:text-primary-fixed-dim">Matrix Business Services</div>
+<div class="flex items-center bg-surface-container-high rounded-full px-3 py-1">
+<span class="material-symbols-outlined text-on-surface-variant text-sm mr-2">search</span>
+<input class="bg-transparent border-none text-body-sm focus:ring-0 text-on-surface placeholder-on-surface-variant w-48" placeholder="Search entities..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-inverse-primary transition-colors">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<div class="flex items-center gap-2 border-l border-outline-variant pl-4">
+<div class="flex flex-col text-right">
+<span class="font-label-caps text-label-caps text-primary">Matrix Ltd.</span>
+<span class="font-data-mono text-data-mono text-on-surface-variant text-[10px]">EU - GDPR</span>
+</div>
+<img alt="Actor ID: 4921-X" class="w-8 h-8 rounded-full border border-outline-variant cursor-pointer hover:border-primary transition-colors" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAH73eyhLXr1WnRChULqvVUGM1d986PlnRFfmFCF0gfCkzCX7ajKHJTbblcNKaXFrtnEE3TtLGTGdVGiSAQnSANqzPisVsX-K98u01SsCDm8C45PjtrtrVJpnOmLJ-xFCQiWqQWdtws3NgJowy3NOVgKiVFwXxbZH5N9ajNowoa06ACRE0yeCVPMNyiOb6_x1HRi-iXFZ_OEZ2vTCJeD70to9_6g5smFxfMYfUo8INVe5yTnkBgn-Gqlw"/>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-sidebar-width mt-16 p-container-margin h-[calc(100vh-4rem)] overflow-y-auto">
+<div class="max-w-7xl mx-auto">
+<div class="flex justify-between items-end mb-6">
+<div>
+<h2 class="font-page-title text-page-title text-on-surface mb-1">Entity Management</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Manage compliance scopes across 15 active group fiduciary entities.</p>
+</div>
+<div class="flex gap-3">
+<button class="px-4 py-2 bg-surface-container border border-outline-variant rounded-lg font-label-caps text-label-caps text-on-surface flex items-center gap-2 hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-sm">filter_list</span> Filter
+                    </button>
+<button class="px-4 py-2 bg-primary text-on-primary rounded-lg font-label-caps text-label-caps flex items-center gap-2 hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-sm">add</span> Add Entity
+                    </button>
+</div>
+</div>
+<!-- Fiduciary Scope Indicators (Context) -->
+<div class="mb-6 flex gap-2">
+<span class="inline-flex items-center px-2 py-1 rounded bg-secondary-container text-on-secondary-container font-data-mono text-data-mono border border-secondary">
+                    Total Stakeholders: 15
+                </span>
+<span class="inline-flex items-center px-2 py-1 rounded bg-surface-container text-on-surface font-data-mono text-data-mono border border-outline-variant">
+                    Active Jurisdictions: 8
+                </span>
+<span class="inline-flex items-center px-2 py-1 rounded bg-error-container text-on-error-container font-data-mono text-data-mono border border-error">
+                    Risk Alerts: 2
+                </span>
+</div>
+<!-- High-Density Table -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+<table class="w-full text-left border-collapse">
+<thead class="bg-slate-50 sticky top-0 z-10 border-b border-outline-variant">
+<tr>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold">Entity Name</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold w-24">UDS Stake</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold w-40">Primary Jurisdiction</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold w-48">Data Residency</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold w-28">Status</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant font-semibold text-right w-32">Action</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors group">
+<td class="px-4 py-2 flex items-center gap-3 h-full">
+<div class="w-6 h-6 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-xs">U</div>
+<span class="font-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">Updater Services</span>
+</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface">100.0%</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">IN-DPDP</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-xs text-outline">database</span> ap-south-1
+                            </td>
+<td class="px-4 py-2">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#d1fae5] text-[#065f46]">ACTIVE</span>
+</td>
+<td class="px-4 py-2 text-right">
+<button class="font-label-caps text-label-caps text-primary hover:text-primary-container transition-colors flex items-center justify-end gap-1 w-full">
+                                    View Scope <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="h-table-row-height bg-slate-25 hover:bg-surface-container-low transition-colors group border-l-2 border-l-transparent hover:border-l-primary">
+<td class="px-4 py-2 flex items-center gap-3 h-full">
+<div class="w-6 h-6 rounded bg-secondary-container text-on-secondary-container flex items-center justify-center font-bold text-xs">M</div>
+<span class="font-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">Matrix</span>
+</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface">75.5%</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">UK-GDPR</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-xs text-outline">database</span> eu-west-2
+                            </td>
+<td class="px-4 py-2">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#d1fae5] text-[#065f46]">ACTIVE</span>
+</td>
+<td class="px-4 py-2 text-right">
+<button class="font-label-caps text-label-caps text-primary hover:text-primary-container transition-colors flex items-center justify-end gap-1 w-full">
+                                    View Scope <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors group">
+<td class="px-4 py-2 flex items-center gap-3 h-full">
+<div class="w-6 h-6 rounded bg-tertiary-container text-on-tertiary-container flex items-center justify-center font-bold text-xs">D</div>
+<span class="font-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">Denave</span>
+</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface">60.0%</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">EU-GDPR</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-xs text-outline">database</span> eu-central-1
+                            </td>
+<td class="px-4 py-2">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#d1fae5] text-[#065f46]">ACTIVE</span>
+</td>
+<td class="px-4 py-2 text-right">
+<button class="font-label-caps text-label-caps text-primary hover:text-primary-container transition-colors flex items-center justify-end gap-1 w-full">
+                                    View Scope <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="h-table-row-height bg-slate-25 hover:bg-surface-container-low transition-colors group border-l-2 border-l-error border-l-solid">
+<td class="px-4 py-2 flex items-center gap-3 h-full">
+<div class="w-6 h-6 rounded bg-error-container text-on-error-container flex items-center justify-center font-bold text-xs">A</div>
+<span class="font-body-md text-on-surface font-semibold group-hover:text-primary transition-colors">Athena BPO</span>
+<span class="material-symbols-outlined text-error text-[16px]" title="Audit Pending">warning</span>
+</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface">55.2%</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">IN-DPDP</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-xs text-outline">database</span> ap-south-1
+                            </td>
+<td class="px-4 py-2">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#fef08a] text-[#854d0e]">REVIEW</span>
+</td>
+<td class="px-4 py-2 text-right">
+<button class="font-label-caps text-label-caps text-primary hover:text-primary-container transition-colors flex items-center justify-end gap-1 w-full">
+                                    View Scope <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors group">
+<td class="px-4 py-2 flex items-center gap-3 h-full">
+<div class="w-6 h-6 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-xs">G</div>
+<span class="font-body-md text-on-surface font-semibold group-hover:text-primary transition-colors text-on-surface-variant line-through">Global Flight Handling</span>
+</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">0.0%</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant">US-CCPA</td>
+<td class="px-4 py-2 font-data-mono text-data-mono text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-xs text-outline">database</span> us-east-1
+                            </td>
+<td class="px-4 py-2">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-surface-variant text-on-surface-variant">INACTIVE</span>
+</td>
+<td class="px-4 py-2 text-right">
+<button class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary-container transition-colors flex items-center justify-end gap-1 w-full">
+                                    View Logs <span class="material-symbols-outlined text-sm">history</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="mt-4 flex justify-between items-center text-sm text-on-surface-variant">
+<span>Showing 1 to 5 of 15 entities</span>
+<div class="flex gap-1">
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high disabled:opacity-50" disabled=""><span class="material-symbols-outlined text-sm">chevron_left</span></button>
+<button class="w-8 h-8 flex items-center justify-center rounded bg-primary text-on-primary">1</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high">2</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high">3</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high"><span class="material-symbols-outlined text-sm">chevron_right</span></button>
+</div>
+</div>
+</div>
+</main>
+</body></html>

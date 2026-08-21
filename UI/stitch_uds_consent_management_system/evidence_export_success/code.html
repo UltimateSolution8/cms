@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Export Success - UDS Compliance Console</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@450&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            display: inline-block;
+            line-height: 1;
+            text-transform: none;
+            letter-spacing: normal;
+            word-wrap: normal;
+            white-space: nowrap;
+            direction: ltr;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                            "background": "#fcf8ff",
+                            "on-secondary-fixed-variant": "#3c475a",
+                            "secondary-fixed-dim": "#bcc7de",
+                            "surface-container-lowest": "#ffffff",
+                            "on-primary-fixed": "#0f0069",
+                            "tertiary": "#511c00",
+                            "on-surface": "#1b1b22",
+                            "surface-tint": "#544fc0",
+                            "primary": "#1f108e",
+                            "primary-fixed-dim": "#c3c0ff",
+                            "on-tertiary-fixed": "#351000",
+                            "secondary-container": "#d5e0f8",
+                            "on-tertiary-container": "#fe9562",
+                            "inverse-on-surface": "#f3eff9",
+                            "surface-container-high": "#eae6f1",
+                            "surface": "#fcf8ff",
+                            "tertiary-fixed-dim": "#ffb694",
+                            "surface-dim": "#dcd8e3",
+                            "on-secondary": "#ffffff",
+                            "on-error-container": "#93000a",
+                            "outline-variant": "#c8c4d5",
+                            "tertiary-container": "#752c00",
+                            "on-secondary-fixed": "#111c2d",
+                            "inverse-surface": "#303037",
+                            "on-primary-fixed-variant": "#3b35a7",
+                            "secondary": "#545f73",
+                            "on-surface-variant": "#464553",
+                            "on-error": "#ffffff",
+                            "surface-variant": "#e4e1eb",
+                            "on-tertiary-fixed-variant": "#7a3003",
+                            "outline": "#777584",
+                            "primary-container": "#3730a3",
+                            "on-secondary-container": "#586377",
+                            "on-primary": "#ffffff",
+                            "surface-container-highest": "#e4e1eb",
+                            "error-container": "#ffdad6",
+                            "secondary-fixed": "#d8e3fb",
+                            "inverse-primary": "#c3c0ff",
+                            "tertiary-fixed": "#ffdbcc",
+                            "on-tertiary": "#ffffff",
+                            "primary-fixed": "#e2dfff",
+                            "error": "#ba1a1a",
+                            "surface-container": "#f0ecf6",
+                            "on-background": "#1b1b22",
+                            "surface-bright": "#fcf8ff",
+                            "surface-container-low": "#f6f2fc",
+                            "on-primary-container": "#a9a7ff"
+                    },
+                    "borderRadius": {
+                            "DEFAULT": "0.125rem",
+                            "lg": "0.25rem",
+                            "xl": "0.5rem",
+                            "full": "0.75rem"
+                    },
+                    "spacing": {
+                            "table-row-height": "44px",
+                            "container-margin": "32px",
+                            "gutter": "16px",
+                            "unit": "4px",
+                            "sidebar-width": "260px"
+                    },
+                    "fontFamily": {
+                            "body-sm": ["Inter"],
+                            "section-header": ["Inter"],
+                            "body-md": ["Inter"],
+                            "label-caps": ["Inter"],
+                            "page-title": ["Inter"],
+                            "data-mono": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                            "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+                            "section-header": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                            "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                            "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                            "page-title": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                            "data-mono": ["13px", { "lineHeight": "16px", "fontWeight": "450" }]
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-surface-container min-h-screen flex items-center justify-center p-gutter">
+<!-- Modal Canvas -->
+<main class="w-full max-w-3xl bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg flex flex-col overflow-hidden relative">
+<!-- Top Accent Border -->
+<div class="h-[4px] w-full bg-primary absolute top-0 left-0"></div>
+<div class="p-container-margin flex flex-col items-center">
+<!-- Success Icon -->
+<div class="mb-8 p-4 bg-primary-fixed rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-[72px] text-primary" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<!-- Header Text -->
+<div class="text-center max-w-xl mb-10">
+<h1 class="font-page-title text-page-title text-on-surface mb-3">Evidence Package Assembled Successfully</h1>
+<p class="font-body-md text-body-md text-on-surface-variant">The requested legal and fiduciary records have been securely compiled, cryptographically hashed, and are ready for secure offline transfer.</p>
+</div>
+<!-- Structured Data Details -->
+<div class="w-full grid grid-cols-1 md:grid-cols-2 gap-gutter mb-10 bg-surface-container-low p-gutter rounded-lg border border-outline-variant">
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Package ID</span>
+<span class="font-data-mono text-data-mono text-on-surface bg-surface p-2 rounded border border-outline-variant break-all">EVPKG-20231109-883A</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Subject Identifier</span>
+<span class="font-data-mono text-data-mono text-on-surface bg-surface p-2 rounded border border-outline-variant break-all">SUBJ-UUID-9F4A-211B</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Cryptographic Hash (SHA-256)</span>
+<div class="flex items-center gap-2 bg-surface p-2 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-[16px] text-primary">verified_user</span>
+<span class="font-data-mono text-data-mono text-on-surface truncate">e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</span>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Compliance Status</span>
+<div class="flex items-center gap-2 bg-surface p-2 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-[16px] text-primary" style="font-variation-settings: 'FILL' 1;">assignment_turned_in</span>
+<span class="font-data-mono text-data-mono text-on-surface">ISO 27560-Compliant Receipt Included</span>
+</div>
+</div>
+</div>
+<!-- Primary Action -->
+<button class="w-full max-w-md bg-primary hover:bg-primary-container text-on-primary hover:text-on-primary-container transition-colors duration-200 py-4 px-6 rounded-lg flex items-center justify-center gap-3 shadow-sm border border-transparent">
+<span class="material-symbols-outlined">download</span>
+<span class="font-section-header text-section-header">Download Board-Ready Package (.zip)</span>
+</button>
+<!-- Secondary Action -->
+<a class="mt-6 font-body-md text-body-md text-primary hover:text-primary-container flex items-center gap-2 transition-colors" href="#">
+<span class="material-symbols-outlined text-[18px]">arrow_back</span>
+                Return to Fiduciary Entities
+            </a>
+</div>
+</main>
+</body></html>

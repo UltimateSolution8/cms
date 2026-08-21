@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Global Compliance Dashboard - UDS Group</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@450&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container-low": "#f6f2fc",
+                        "on-tertiary-container": "#fe9562",
+                        "on-tertiary-fixed-variant": "#7a3003",
+                        "primary": "#1f108e",
+                        "surface-dim": "#dcd8e3",
+                        "secondary-fixed": "#d8e3fb",
+                        "inverse-primary": "#c3c0ff",
+                        "on-primary-fixed": "#0f0069",
+                        "primary-fixed-dim": "#c3c0ff",
+                        "on-tertiary-fixed": "#351000",
+                        "error": "#ba1a1a",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#a9a7ff",
+                        "tertiary": "#511c00",
+                        "on-secondary-fixed-variant": "#3c475a",
+                        "secondary": "#545f73",
+                        "on-surface": "#1b1b22",
+                        "on-background": "#1b1b22",
+                        "inverse-on-surface": "#f3eff9",
+                        "surface-container": "#f0ecf6",
+                        "error-container": "#ffdad6",
+                        "on-primary": "#ffffff",
+                        "on-primary-fixed-variant": "#3b35a7",
+                        "inverse-surface": "#303037",
+                        "primary-container": "#3730a3",
+                        "tertiary-fixed": "#ffdbcc",
+                        "on-secondary-fixed": "#111c2d",
+                        "primary-fixed": "#e2dfff",
+                        "surface-tint": "#544fc0",
+                        "outline": "#777584",
+                        "on-tertiary": "#ffffff",
+                        "surface-bright": "#fcf8ff",
+                        "on-secondary": "#ffffff",
+                        "surface-variant": "#e4e1eb",
+                        "on-surface-variant": "#464553",
+                        "secondary-fixed-dim": "#bcc7de",
+                        "tertiary-fixed-dim": "#ffb694",
+                        "surface-container-highest": "#e4e1eb",
+                        "surface": "#fcf8ff",
+                        "on-secondary-container": "#586377",
+                        "on-error": "#ffffff",
+                        "secondary-container": "#d5e0f8",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#c8c4d5",
+                        "surface-container-high": "#eae6f1",
+                        "background": "#fcf8ff",
+                        "tertiary-container": "#752c00"
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.125rem",
+                        lg: "0.25rem",
+                        xl: "0.5rem",
+                        full: "0.75rem"
+                    },
+                    spacing: {
+                        "container-margin": "32px",
+                        "table-row-height": "44px",
+                        "gutter": "16px",
+                        "sidebar-width": "260px",
+                        "unit": "4px"
+                    },
+                    fontFamily: {
+                        "data-mono": ["JetBrains Mono"],
+                        "body-md": ["Inter"],
+                        "section-header": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "page-title": ["Inter"]
+                    },
+                    fontSize: {
+                        "data-mono": ["13px", { lineHeight: "16px", fontWeight: "450" }],
+                        "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+                        "section-header": ["20px", { lineHeight: "28px", letterSpacing: "-0.01em", fontWeight: "600" }],
+                        "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }],
+                        "label-caps": ["12px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "600" }],
+                        "page-title": ["30px", { lineHeight: "38px", letterSpacing: "-0.02em", fontWeight: "700" }]
+                    }
+                }
+            }
+        };
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: 'liga';
+            -webkit-font-smoothing: antialiased;
+        }
+        /* Custom scrollbar for data density */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c8c4d5;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #777584;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen antialiased flex overflow-hidden">
+<!-- JSON Component: SideNavBar -->
+<nav class="bg-surface dark:bg-inverse-surface fixed left-0 top-0 bottom-0 z-40 flex flex-col docked h-full w-sidebar-width border-r border-outline-variant dark:border-outline flat no shadows hidden md:flex">
+<!-- Header -->
+<div class="px-6 py-6 border-b border-outline-variant flex items-center gap-3">
+<div class="w-10 h-10 rounded bg-primary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-on-primary-container" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div>
+<h1 class="font-section-header text-section-header font-bold text-primary dark:text-inverse-primary truncate">UDS Compliance</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant truncate">Regulatory Console</p>
+</div>
+</div>
+<!-- Fiduciary Scope Indicator -->
+<div class="px-6 py-4 border-b border-outline-variant bg-surface-container-low">
+<p class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">Active Jurisdiction</p>
+<div class="flex items-center gap-2 text-primary font-bold">
+<span class="material-symbols-outlined text-[18px]">public</span>
+<span>Global - Consolidated</span>
+</div>
+</div>
+<!-- Tabs -->
+<div class="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded bg-secondary-container dark:bg-secondary text-on-secondary-container dark:text-on-secondary font-bold hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span>Global Overview</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="corporate_fare">corporate_fare</span>
+<span>Fiduciary Entities</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="rule">rule</span>
+<span>Rights Queue</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="inventory_2">inventory_2</span>
+<span>Evidence Bundle</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="history_edu">history_edu</span>
+<span>Registries</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="shield_check">format_image_left</span>
+<span>Integrity Sweeps</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>System Settings</span>
+</a>
+</div>
+<!-- User Footer -->
+<div class="px-6 py-4 border-t border-outline-variant flex items-center gap-3">
+<img class="w-8 h-8 rounded-full object-cover" data-alt="A small, professional headshot portrait of a corporate compliance officer in a modern office environment, high resolution, professional lighting, realistic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCqmprvsk1n5ToJqLEq5oE2LR7xzXF97AdlOGVTk-C-YjjSRoCJd1QjKaiOEJqmP_xPu4YmFqq2nTwftcknQf2Mdk4vlcQjaUmU5cYkNEiR0PLzOIrhZ4LmoCFUiJIs8o9usOzkSBDX7rtp7I-RUNsRIYr3t_PrSldPn_1gd7PIEQpBMDt-2NrP0BxwCI2RHcity8pX9m36WPC576dIw0MlJ9k12k33ppodGqlMvD8MtBfVU0hBruJl8A"/>
+<div class="flex-1 min-w-0">
+<p class="font-data-mono text-data-mono text-on-surface truncate">ID: 4921-X</p>
+<p class="font-body-sm text-body-sm text-on-surface-variant truncate">System Admin</p>
+</div>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 md:ml-sidebar-width h-screen flex flex-col bg-surface overflow-hidden">
+<!-- JSON Component: TopAppBar -->
+<header class="bg-surface-bright dark:bg-surface-dim fixed top-0 right-0 left-sidebar-width z-30 flex justify-between items-center px-gutter h-table-row-height border-b border-outline-variant dark:border-outline flat no shadows hidden md:flex shrink-0">
+<!-- Search -->
+<div class="flex-1 max-w-md">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant text-[20px]">search</span>
+<input class="w-full h-8 pl-10 pr-3 rounded bg-surface-container-low border-none focus:ring-1 focus:ring-primary text-body-sm font-body-sm text-on-surface placeholder-on-surface-variant" placeholder="Search Matrix Business Services..." type="text"/>
+</div>
+</div>
+<!-- Context Actions -->
+<div class="flex items-center gap-4">
+<button class="p-1.5 text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-1.5 text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+<div class="h-5 w-px bg-outline-variant mx-1"></div>
+<button class="px-3 py-1 bg-primary text-on-primary rounded font-label-caps text-label-caps hover:opacity-90 transition-opacity">
+                     UP
+                 </button>
+</div>
+</header>
+<!-- Scrollable Canvas -->
+<div class="flex-1 overflow-y-auto mt-[44px] md:mt-[44px] p-container-margin pt-6">
+<!-- Page Header -->
+<div class="mb-8">
+<h2 class="font-page-title text-page-title text-primary font-bold">Global Compliance Overview</h2>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">Consolidated fiduciary status across UDS Group</p>
+</div>
+<!-- KPI Row (4 Cards) -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+<!-- Card 1: Overdue Rights Requests -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-5 flex flex-col border-t-2 border-t-error">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Overdue Rights Requests</span>
+<span class="material-symbols-outlined text-error text-[20px]" style="font-variation-settings: 'FILL' 1;">warning</span>
+</div>
+<div class="flex items-baseline gap-3 mb-1">
+<span class="font-page-title text-page-title text-on-surface">12</span>
+<span class="font-data-mono text-data-mono text-error flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[14px]">trending_up</span> +2 this week
+                        </span>
+</div>
+<div class="mt-auto pt-3 border-t border-surface-variant">
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-error-container text-on-error-container font-label-caps text-label-caps">ALERT RED</span>
+</div>
+</div>
+<!-- Card 2: Active Integrity Sweeps -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-5 flex flex-col border-t-2 border-t-[#059669]">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Active Integrity Sweeps</span>
+<span class="material-symbols-outlined text-[#059669] text-[20px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div class="flex items-baseline gap-3 mb-1">
+<span class="font-page-title text-page-title text-on-surface">8/15</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Entities</span>
+</div>
+<p class="font-data-mono text-data-mono text-on-surface-variant mb-2">Next sweep: 02:15 AM</p>
+<div class="mt-auto pt-3 border-t border-surface-variant">
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-[#D1FAE5] text-[#065F46] font-label-caps text-label-caps">VERIFIED GREEN</span>
+</div>
+</div>
+<!-- Card 3: Consent Capture (24h) -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-5 flex flex-col border-t-2 border-t-primary">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Consent Capture (24h)</span>
+<span class="material-symbols-outlined text-primary text-[20px]">how_to_reg</span>
+</div>
+<div class="flex items-baseline gap-3 mb-1">
+<span class="font-page-title text-page-title text-on-surface">42,103</span>
+<span class="font-data-mono text-data-mono text-[#059669] flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[14px]">arrow_upward</span> +5.2%
+                        </span>
+</div>
+<div class="mt-auto pt-3 border-t border-surface-variant">
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-surface-container-high text-on-surface font-label-caps text-label-caps">NEUTRAL</span>
+</div>
+</div>
+<!-- Card 4: Propagation Health -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-5 flex flex-col border-t-2 border-t-[#D97706]">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider">Propagation Health</span>
+<span class="material-symbols-outlined text-[#D97706] text-[20px]" style="font-variation-settings: 'FILL' 1;">error</span>
+</div>
+<div class="flex items-baseline gap-3 mb-1">
+<span class="font-page-title text-page-title text-on-surface">98.4%</span>
+</div>
+<p class="font-data-mono text-data-mono text-on-surface-variant mb-2">3 Uncovered Targets</p>
+<div class="mt-auto pt-3 border-t border-surface-variant">
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-[#FEF3C7] text-[#92400E] font-label-caps text-label-caps">WARNING AMBER</span>
+</div>
+</div>
+</div>
+<!-- Main Section: Two Columns -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-8">
+<!-- Left (Large): Entity Health Matrix -->
+<div class="lg:col-span-8 bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden flex flex-col">
+<div class="p-5 border-b border-outline-variant bg-surface-bright flex justify-between items-center">
+<div>
+<h3 class="font-section-header text-section-header text-on-surface">Entity Health Matrix</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Cross-jurisdictional compliance status.</p>
+</div>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">filter_list</span>
+</button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-slate-50 border-b border-outline-variant">
+<th class="px-5 py-3 font-label-caps text-label-caps text-on-surface-variant uppercase sticky top-0 bg-slate-50">Entity ID</th>
+<th class="px-5 py-3 font-label-caps text-label-caps text-on-surface-variant uppercase sticky top-0 bg-slate-50">Primary Jurisdiction</th>
+<th class="px-5 py-3 font-label-caps text-label-caps text-on-surface-variant uppercase sticky top-0 bg-slate-50">Ledger Integrity</th>
+<th class="px-5 py-3 font-label-caps text-label-caps text-on-surface-variant uppercase sticky top-0 bg-slate-50 text-right">Open Rights</th>
+<th class="px-5 py-3 font-label-caps text-label-caps text-on-surface-variant uppercase sticky top-0 bg-slate-50 text-right">Last Sync</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors group">
+<td class="px-5 font-data-mono text-data-mono text-primary font-bold">
+                                        Denave India
+                                        <div class="text-[10px] text-on-surface-variant font-normal">#ENT-IN-001</div>
+</td>
+<td class="px-5 font-body-sm text-body-sm text-on-surface">IN - DPDP</td>
+<td class="px-5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#D1FAE5] text-[#065F46] font-data-mono text-[11px]">
+<span class="material-symbols-outlined text-[12px]">verified</span> VERIFIED
+                                        </span>
+</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface text-right">4</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface-variant text-right">2m ago</td>
+</tr>
+<!-- Row 2 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors">
+<td class="px-5 font-data-mono text-data-mono text-primary font-bold">
+                                        Matrix Business Services
+                                        <div class="text-[10px] text-on-surface-variant font-normal">#ENT-UK-042</div>
+</td>
+<td class="px-5 font-body-sm text-body-sm text-on-surface">UK - GDPR</td>
+<td class="px-5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#D1FAE5] text-[#065F46] font-data-mono text-[11px]">
+<span class="material-symbols-outlined text-[12px]">verified</span> VERIFIED
+                                        </span>
+</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface text-right">12</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface-variant text-right">14m ago</td>
+</tr>
+<!-- Row 3 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors">
+<td class="px-5 font-data-mono text-data-mono text-primary font-bold">
+                                        Athena BPO
+                                        <div class="text-[10px] text-on-surface-variant font-normal">#ENT-EU-109</div>
+</td>
+<td class="px-5 font-body-sm text-body-sm text-on-surface">EU - GDPR</td>
+<td class="px-5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#FEF3C7] text-[#92400E] font-data-mono text-[11px]">
+<span class="material-symbols-outlined text-[12px]">sync_problem</span> SYNCING
+                                        </span>
+</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface text-right">0</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface-variant text-right">1h ago</td>
+</tr>
+<!-- Row 4 -->
+<tr class="h-table-row-height hover:bg-surface-container-low transition-colors">
+<td class="px-5 font-data-mono text-data-mono text-primary font-bold">
+                                        Global Flight Handling
+                                        <div class="text-[10px] text-on-surface-variant font-normal">#ENT-US-554</div>
+</td>
+<td class="px-5 font-body-sm text-body-sm text-on-surface">US - CCPA</td>
+<td class="px-5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#D1FAE5] text-[#065F46] font-data-mono text-[11px]">
+<span class="material-symbols-outlined text-[12px]">verified</span> VERIFIED
+                                        </span>
+</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface text-right">3</td>
+<td class="px-5 font-data-mono text-data-mono text-on-surface-variant text-right">5m ago</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-3 border-t border-outline-variant bg-surface-bright flex justify-end">
+<button class="text-primary font-label-caps text-label-caps hover:underline">VIEW ALL ENTITIES</button>
+</div>
+</div>
+<!-- Right (Small): Recent Breach SLA Alerts -->
+<div class="lg:col-span-4 bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden flex flex-col">
+<div class="p-5 border-b border-outline-variant bg-surface-bright">
+<h3 class="font-section-header text-section-header text-on-surface flex items-center gap-2">
+                            Recent SLA Alerts
+                            <span class="flex h-2 w-2 relative">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-error"></span>
+</span>
+</h3>
+</div>
+<div class="p-4 flex-1 overflow-y-auto">
+<!-- Timeline Append-Only Pattern -->
+<div class="relative pl-6 pb-6 border-l border-outline-variant ml-2 last:border-0 last:pb-0">
+<div class="absolute left-[-9px] top-0 w-4 h-4 rounded-full bg-surface-container-lowest border-2 border-error flex items-center justify-center">
+<div class="w-1.5 h-1.5 bg-error rounded-full"></div>
+</div>
+<div class="bg-error-container rounded p-3 ml-2 border border-[#fecaca]">
+<div class="flex justify-between items-start mb-1">
+<span class="font-label-caps text-label-caps text-on-error-container font-bold">DPDP Rule 7: Detailed Report</span>
+<span class="font-data-mono text-[11px] text-error">14h 22m left</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface mt-1">Breach notification payload incomplete for Entity #ENT-IN-001. Requires DPO sign-off.</p>
+<div class="mt-2 pt-2 border-t border-[#fecaca] font-data-mono text-[10px] text-on-surface-variant flex justify-between">
+<span>TKT-8992</span>
+<span>Auth: SYS-AUTO</span>
+</div>
+</div>
+</div>
+<div class="relative pl-6 pb-6 border-l border-outline-variant ml-2 last:border-0 last:pb-0">
+<div class="absolute left-[-9px] top-0 w-4 h-4 rounded-full bg-surface-container-lowest border-2 border-[#D97706] flex items-center justify-center">
+<div class="w-1.5 h-1.5 bg-[#D97706] rounded-full"></div>
+</div>
+<div class="bg-[#FEF3C7] rounded p-3 ml-2 border border-[#fde68a]">
+<div class="flex justify-between items-start mb-1">
+<span class="font-label-caps text-label-caps text-[#92400E] font-bold">GDPR Art 33: Initial Notice</span>
+<span class="font-data-mono text-[11px] text-[#D97706]">42h 05m left</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface mt-1">Pending contextual classification of exposed data types.</p>
+<div class="mt-2 pt-2 border-t border-[#fde68a] font-data-mono text-[10px] text-on-surface-variant flex justify-between">
+<span>TKT-8995</span>
+<span>Auth: UID-4921</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Bottom Section: Global Consent Distribution -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-5 mb-8">
+<div class="flex justify-between items-center mb-6">
+<div>
+<h3 class="font-section-header text-section-header text-on-surface">Global Consent Distribution</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Real-time aggregate across all ledgers.</p>
+</div>
+<div class="flex gap-4 font-body-sm text-body-sm">
+<div class="flex items-center gap-1.5"><div class="w-3 h-3 rounded-sm bg-primary"></div><span>Granted</span></div>
+<div class="flex items-center gap-1.5"><div class="w-3 h-3 rounded-sm bg-outline-variant"></div><span>Withdrawn</span></div>
+<div class="flex items-center gap-1.5"><div class="w-3 h-3 rounded-sm bg-error"></div><span>Expired</span></div>
+</div>
+</div>
+<!-- Chart Placeholder using CSS patterns to avoid external images -->
+<div class="h-48 w-full rounded border border-outline-variant bg-surface-container-low relative overflow-hidden flex items-center justify-center">
+<!-- Decorative abstract chart representation -->
+<div class="absolute inset-0 flex">
+<div class="w-[70%] h-full bg-primary/10 border-r border-primary/20 flex flex-col justify-end p-4">
+<div class="w-full bg-primary h-[80%] rounded-t opacity-80"></div>
+</div>
+<div class="w-[20%] h-full bg-outline-variant/10 border-r border-outline-variant/20 flex flex-col justify-end p-4">
+<div class="w-full bg-outline-variant h-[40%] rounded-t opacity-80"></div>
+</div>
+<div class="w-[10%] h-full bg-error/10 flex flex-col justify-end p-4">
+<div class="w-full bg-error h-[15%] rounded-t opacity-80"></div>
+</div>
+</div>
+<div class="relative z-10 bg-surface-container-lowest/90 px-4 py-2 rounded shadow-sm border border-outline-variant font-data-mono text-data-mono text-on-surface text-center backdrop-blur-sm">
+<span class="block text-primary font-bold text-[16px]">70% Granted</span>
+<span class="block text-on-surface-variant text-[11px] mt-1">Live Feed Interruption Simulated</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

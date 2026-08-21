@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Subject Evidence Bundle - Matrix Business Services</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@450&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#f6f2fc",
+                        "on-tertiary-container": "#fe9562",
+                        "on-tertiary-fixed-variant": "#7a3003",
+                        "primary": "#1f108e",
+                        "surface-dim": "#dcd8e3",
+                        "secondary-fixed": "#d8e3fb",
+                        "inverse-primary": "#c3c0ff",
+                        "on-primary-fixed": "#0f0069",
+                        "primary-fixed-dim": "#c3c0ff",
+                        "on-tertiary-fixed": "#351000",
+                        "error": "#ba1a1a",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#a9a7ff",
+                        "tertiary": "#511c00",
+                        "on-secondary-fixed-variant": "#3c475a",
+                        "secondary": "#545f73",
+                        "on-surface": "#1b1b22",
+                        "on-background": "#1b1b22",
+                        "inverse-on-surface": "#f3eff9",
+                        "surface-container": "#f0ecf6",
+                        "error-container": "#ffdad6",
+                        "on-primary": "#ffffff",
+                        "on-primary-fixed-variant": "#3b35a7",
+                        "inverse-surface": "#303037",
+                        "primary-container": "#3730a3",
+                        "tertiary-fixed": "#ffdbcc",
+                        "on-secondary-fixed": "#111c2d",
+                        "primary-fixed": "#e2dfff",
+                        "surface-tint": "#544fc0",
+                        "outline": "#777584",
+                        "on-tertiary": "#ffffff",
+                        "surface-bright": "#fcf8ff",
+                        "on-secondary": "#ffffff",
+                        "surface-variant": "#e4e1eb",
+                        "on-surface-variant": "#464553",
+                        "secondary-fixed-dim": "#bcc7de",
+                        "tertiary-fixed-dim": "#ffb694",
+                        "surface-container-highest": "#e4e1eb",
+                        "surface": "#fcf8ff",
+                        "on-secondary-container": "#586377",
+                        "on-error": "#ffffff",
+                        "secondary-container": "#d5e0f8",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#c8c4d5",
+                        "surface-container-high": "#eae6f1",
+                        "background": "#fcf8ff",
+                        "tertiary-container": "#752c00"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "container-margin": "32px",
+                        "table-row-height": "44px",
+                        "gutter": "16px",
+                        "sidebar-width": "260px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "data-mono": ["JetBrains Mono"],
+                        "body-md": ["Inter"],
+                        "section-header": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "page-title": ["Inter"]
+                    },
+                    "fontSize": {
+                        "data-mono": ["13px", {"lineHeight": "16px", "fontWeight": "450"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "section-header": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                        "page-title": ["30px", {"lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen flex">
+<!-- TopAppBar -->
+<header class="fixed top-0 right-0 left-sidebar-width z-30 flex justify-between items-center px-gutter h-table-row-height bg-surface-bright dark:bg-surface-dim border-b border-outline-variant dark:border-outline flat no shadows hidden md:flex">
+<div class="flex items-center gap-4">
+<h1 class="font-section-header text-section-header font-bold text-primary dark:text-primary-fixed-dim">Matrix Business Services</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="flex items-center gap-2 px-3 py-1 bg-primary text-on-primary rounded text-body-sm font-semibold hover:bg-primary-container transition-colors">
+<span class="material-symbols-outlined text-[18px]">upload</span>
+                UP
+            </button>
+<div class="flex items-center gap-2 text-on-surface-variant">
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-variant">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-variant">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 bottom-0 z-40 flex flex-col bg-surface dark:bg-inverse-surface text-primary dark:text-inverse-primary font-body-md text-body-md docked left-0 h-full w-sidebar-width border-r border-outline-variant dark:border-outline flat no shadows hidden md:flex">
+<div class="p-6 border-b border-outline-variant dark:border-outline">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container flex items-center justify-center text-on-primary-container">
+<span class="material-symbols-outlined">security</span>
+</div>
+<div>
+<h2 class="font-page-title text-page-title text-primary dark:text-inverse-primary text-[18px] leading-tight">UDS Compliance</h2>
+<p class="text-body-sm text-on-surface-variant">Regulatory Console</p>
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto py-4">
+<ul class="space-y-1 px-3">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+                        Global Overview
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">corporate_fare</span>
+                        Fiduciary Entities
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">rule</span>
+                        Rights Queue
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded bg-secondary-container dark:bg-secondary text-on-secondary-container dark:text-on-secondary font-bold hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">inventory_2</span>
+                        Evidence Bundle
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">history_edu</span>
+                        Registries
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">format_image_left</span>
+                        Integrity Sweeps
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+                        System Settings
+                    </a>
+</li>
+</ul>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 md:ml-[260px] pt-[44px] bg-background min-h-screen">
+<!-- Fiduciary Scope Indicator -->
+<div class="fixed top-[44px] right-0 bg-surface-container-highest border-b border-l border-outline-variant px-4 py-2 text-body-sm z-20 flex flex-col items-end">
+<span class="text-on-surface-variant">Scope: <strong class="text-on-surface">Denave India</strong></span>
+<span class="text-on-surface-variant">Context: <strong class="text-on-surface">IN - DPDPA</strong></span>
+</div>
+<div class="max-w-[1440px] mx-auto p-container-margin md:p-8">
+<!-- Profile Header -->
+<div class="mb-8 border-b-2 border-primary pb-6 flex justify-between items-start">
+<div>
+<h1 class="font-page-title text-page-title text-on-surface mb-2">Evidence Bundle: subject-001-walkthrough</h1>
+<div class="flex items-center gap-4 text-body-sm text-on-surface-variant">
+<span class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">business</span>
+                            Entity: Denave India
+                        </span>
+<span class="flex items-center gap-1 text-primary bg-primary-container/20 px-2 py-0.5 rounded border border-primary/20">
+<span class="material-symbols-outlined text-[16px]">verified</span>
+                            Ledger Integrity: VERIFIED
+                        </span>
+</div>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary font-section-header text-body-md px-6 py-3 rounded-lg flex items-center gap-2 transition-colors shadow-sm">
+<span class="material-symbols-outlined">download</span>
+                    Export Board Complaint Package
+                </button>
+</div>
+<div class="grid grid-cols-12 gap-gutter">
+<!-- Left Column (Main Data) -->
+<div class="col-span-12 xl:col-span-8 space-y-8">
+<!-- Section 1: Current Consent State -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden relative">
+<div class="bg-surface-container-low px-6 py-4 border-b border-outline-variant flex items-center justify-between sticky top-0 z-10">
+<h2 class="font-section-header text-section-header text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">policy</span>
+                                Current Consent State
+                            </h2>
+</div>
+<div class="p-6">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<!-- Card 1 -->
+<div class="border border-outline-variant rounded bg-surface p-4 border-l-4 border-l-error">
+<div class="flex justify-between items-start mb-3">
+<h3 class="font-body-md font-semibold text-on-surface">MKT_OUTBOUND_CALL</h3>
+<span class="text-label-caps text-error bg-error-container px-2 py-0.5 rounded">WITHDRAWN</span>
+</div>
+<div class="space-y-2 text-body-sm text-on-surface-variant">
+<div class="flex justify-between">
+<span>Legal Basis:</span>
+<span class="text-on-surface font-medium">CONSENT</span>
+</div>
+<div class="flex justify-between">
+<span>Granted At:</span>
+<span class="font-data-mono text-data-mono">Aug 17, 09:42 UTC</span>
+</div>
+<div class="flex justify-between">
+<span>Withdrawn At:</span>
+<span class="font-data-mono text-data-mono text-error">Aug 18, 11:15 UTC</span>
+</div>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="border border-outline-variant rounded bg-surface p-4 border-l-4 border-l-secondary">
+<div class="flex justify-between items-start mb-3">
+<h3 class="font-body-md font-semibold text-on-surface">SYS_ESSENTIAL_TRACKING</h3>
+<span class="text-label-caps text-on-secondary-container bg-secondary-container px-2 py-0.5 rounded">ACTIVE</span>
+</div>
+<div class="space-y-2 text-body-sm text-on-surface-variant">
+<div class="flex justify-between">
+<span>Legal Basis:</span>
+<span class="text-on-surface font-medium">LEGITIMATE_INTEREST</span>
+</div>
+<div class="flex justify-between">
+<span>Granted At:</span>
+<span class="font-data-mono text-data-mono">Aug 17, 09:41 UTC</span>
+</div>
+<div class="flex justify-between">
+<span>Withdrawn At:</span>
+<span class="text-outline italic">N/A</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 3: Enforcement Evidence -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden relative">
+<div class="bg-surface-container-low px-6 py-4 border-b border-outline-variant sticky top-0 z-10">
+<h2 class="font-section-header text-section-header text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">gavel</span>
+                                Enforcement Evidence (Refusals)
+                            </h2>
+</div>
+<div class="p-0">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-lowest text-body-sm text-on-surface-variant border-b border-outline-variant sticky top-[60px] z-10">
+<tr>
+<th class="px-6 py-3 font-semibold w-40">Timestamp</th>
+<th class="px-6 py-3 font-semibold">Action Denied</th>
+<th class="px-6 py-3 font-semibold">System/Actor</th>
+<th class="px-6 py-3 font-semibold">Reason Code</th>
+</tr>
+</thead>
+<tbody class="text-body-sm divide-y divide-outline-variant">
+<tr class="hover:bg-surface-variant/50 transition-colors bg-surface h-table-row-height">
+<td class="px-6 py-3 font-data-mono text-data-mono text-on-surface-variant">Aug 19, 14:00</td>
+<td class="px-6 py-3 text-on-surface font-medium">MKT_OUTBOUND_CALL</td>
+<td class="px-6 py-3 text-on-surface-variant font-data-mono text-data-mono">ATHENA_DIALER</td>
+<td class="px-6 py-3"><span class="text-error bg-error-container/30 px-2 py-0.5 rounded text-label-caps border border-error/20">CONSENT_WITHDRAWN</span></td>
+</tr>
+<tr class="hover:bg-surface-variant/50 transition-colors bg-surface-container-lowest h-table-row-height">
+<td class="px-6 py-3 font-data-mono text-data-mono text-on-surface-variant">Aug 18, 16:30</td>
+<td class="px-6 py-3 text-on-surface font-medium">MKT_EMAIL_CAMPAIGN</td>
+<td class="px-6 py-3 text-on-surface-variant font-data-mono text-data-mono">MARKETO_SYNC</td>
+<td class="px-6 py-3"><span class="text-error bg-error-container/30 px-2 py-0.5 rounded text-label-caps border border-error/20">CONSENT_WITHDRAWN</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+<!-- Right Column (Context & Timeline) -->
+<div class="col-span-12 xl:col-span-4 space-y-8">
+<!-- Section 4: Truncation & Merge Info -->
+<section class="bg-surface-container-low border border-outline-variant rounded-lg p-5">
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-tertiary mt-0.5">merge</span>
+<div>
+<h3 class="font-section-header text-[16px] font-semibold text-on-surface mb-1">Identity Topology</h3>
+<p class="text-body-sm text-on-surface-variant mb-3">This principal record is a composite entity.</p>
+<div class="bg-surface border border-outline-variant rounded p-3 text-body-sm font-data-mono text-data-mono">
+<div class="text-outline mb-1">Merged from:</div>
+<div class="text-on-surface">email: asha.rao@example.in</div>
+<div class="text-on-surface mt-1">phone: +91-9876543210</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 2: Event Hash-Chain (Timeline) -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden flex flex-col h-[600px]">
+<div class="bg-surface-container-low px-5 py-4 border-b border-outline-variant sticky top-0 z-10 flex-shrink-0">
+<h2 class="font-section-header text-[18px] text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">link</span>
+                                Immutable Ledger
+                            </h2>
+</div>
+<div class="p-6 overflow-y-auto flex-1 relative">
+<!-- Vertical Line -->
+<div class="absolute left-10 top-8 bottom-8 w-px bg-outline-variant z-0"></div>
+<div class="space-y-6 relative z-10">
+<!-- Event 2 -->
+<div class="flex gap-4">
+<div class="flex-shrink-0 mt-1">
+<div class="w-8 h-8 rounded-full bg-surface border-2 border-error flex items-center justify-center text-error relative z-10">
+<span class="material-symbols-outlined text-[16px]">cancel</span>
+</div>
+</div>
+<div class="flex-1 bg-surface border border-outline-variant rounded p-3 shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="text-label-caps text-error font-bold">WITHDRAWN</span>
+<span class="font-data-mono text-[11px] text-outline">Aug 18, 11:15 UTC</span>
+</div>
+<div class="text-body-sm text-on-surface-variant mb-2">
+                                            Actor: <span class="font-medium text-on-surface">SUBJECT via WEB</span>
+</div>
+<div class="bg-surface-container-low p-2 rounded text-[11px] font-data-mono text-outline-variant mb-3 break-all flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px]">vpn_key</span>
+                                            Hash: a86fe91b4c...d3f2a
+                                        </div>
+<button class="text-primary text-body-sm font-semibold hover:underline flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">code</span>
+                                            View Payload
+                                        </button>
+</div>
+</div>
+<!-- Chain Link Icon (Visual) -->
+<div class="flex gap-4">
+<div class="flex-shrink-0 w-8 flex justify-center text-outline-variant">
+<span class="material-symbols-outlined text-[18px] rotate-90 bg-surface-container-lowest relative z-10">link</span>
+</div>
+</div>
+<!-- Event 1 -->
+<div class="flex gap-4">
+<div class="flex-shrink-0 mt-1">
+<div class="w-8 h-8 rounded-full bg-surface border-2 border-primary flex items-center justify-center text-primary relative z-10">
+<span class="material-symbols-outlined text-[16px]">check_circle</span>
+</div>
+</div>
+<div class="flex-1 bg-surface border border-outline-variant rounded p-3 shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="text-label-caps text-primary font-bold">GRANTED</span>
+<span class="font-data-mono text-[11px] text-outline">Aug 17, 09:42 UTC</span>
+</div>
+<div class="text-body-sm text-on-surface-variant mb-2">
+                                            Actor: <span class="font-medium text-on-surface">SUBJECT via WEB</span>
+</div>
+<div class="bg-surface-container-low p-2 rounded text-[11px] font-data-mono text-outline-variant mb-3 break-all flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px]">vpn_key</span>
+                                            Hash: 8b449f122c...a1e9b
+                                        </div>
+<button class="text-primary text-body-sm font-semibold hover:underline flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">code</span>
+                                            View Payload
+                                        </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</div>
+</main>
+</body></html>

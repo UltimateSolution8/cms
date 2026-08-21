@@ -3,6 +3,9 @@ target/
 *.class
 *.jar
 *.war
+node_modules/
+dist/
+.turbo/
 
 # Secrets and local overrides. Nothing in this repository should ever carry a real
 # identifier pepper, signing key or client credential — those come from the KMS.
